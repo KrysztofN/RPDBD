@@ -1,1 +1,4 @@
 Requirements.txt
+data/
+__pycache__/
+.env
