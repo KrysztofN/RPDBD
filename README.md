@@ -57,6 +57,10 @@ flowchart LR
 
 **Replay:** zima 2011/12 wysyłana do Kafki w tempie 1 h danych = 1 s, z oryginalnym czasem zdarzenia (event time, watermark).
 
+### Przepływ danych ze źródeł
+
+![przepływ danych](https://github.com/KrysztofN/RPDBD/blob/feat/spec/docs/Przep%C5%82yw%20danych.drawio.png)
+
 ## 5. Procesy
 
 | Id | Proces | Tor | Wejście → wynik |
