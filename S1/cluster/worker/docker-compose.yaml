@@ -1,0 +1,11 @@
+services:
+  datanode:
+    image: apache/hadoop:3.4.1
+    container_name: datanode
+    command: hdfs datanode
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ../conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ../conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+      - /opt/hdfs/data:/data

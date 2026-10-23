@@ -1,0 +1,12 @@
+services:
+  namenode:
+    image: apache/hadoop:3.4.1
+    container_name: namenode
+    command: hdfs namenode
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ../conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ../conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+      - /opt/hdfs/data:/data
+      - /opt/hdfs/upload:/upload
