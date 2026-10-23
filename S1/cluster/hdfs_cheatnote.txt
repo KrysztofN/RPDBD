@@ -1,0 +1,40 @@
+# Tunelowanie potem http://localhost:9870
+ssh -L 9870:10.7.11.21:9870 student@10.7.11.21
+
+# Stan klastra
+hdfs dfsadmin -report | grep -E "Live|Name:"   # mają być 4 workery
+
+# Pliki i katalogi
+hdfs dfs -ls -h /                      # lista
+hdfs dfs -ls -R /datasets              # lista rekurencyjnie
+hdfs dfs -mkdir -p /datasets/projekt   # nowy katalog
+hdfs dfs -mv /stara /nowa              # przeniesienie / zmiana nazwy
+hdfs dfs -cp /a/plik /b/               # kopia
+hdfs dfs -rm /datasets/plik.csv        # usunięcie pliku
+hdfs dfs -rm -r /datasets/projekt      # usunięcie katalogu
+hdfs dfs -du -h /datasets              # rozmiar
+hdfs dfs -df -h                        # wolne miejsce w HDFS
+
+# Podgląd
+hdfs dfs -cat /datasets/plik.csv | head      # początek pliku
+hdfs dfs -tail /datasets/plik.csv            # ostatni 1 KB
+hdfs dfs -stat "%n %b B %r repl" /datasets/plik.csv
+
+# Wrzucanie - zawsze najpierw do upload
+sudo cp ~/dane.csv /opt/hdfs/upload/
+hdfs dfs -put /upload/dane.csv /datasets/          # plik
+hdfs dfs -put /upload/katalog /datasets/           # katalog
+hdfs dfs -put -f /upload/dane.csv /datasets/       # nadpisanie
+curl -L "https://adres/plik.csv" | hdfs dfs -put - /datasets/plik.csv   # prosto z internetu
+
+# Pobieranie - trafia do /opt/hdfs/upload na masterze
+hdfs dfs -get /datasets/dane.csv /upload/
+scp student@10.7.11.21:/opt/hdfs/upload/dane.csv .   # na swój komputer
+
+# Kontenery (master: cd ~/RPDBD/S1/cluster/master, worker: cd ~/RPDBD/S1/cluster/worker)
+docker ps                          # status ma być Up
+docker compose up -d               # start
+docker compose down                # stop
+docker logs --tail 30 namenode     # logi mastera (na workerze: datanode)
+
+# NIGDY nie uruchamiaj ponownie: hdfs namenode -format  (kasuje cały HDFS)

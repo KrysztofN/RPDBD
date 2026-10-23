@@ -1,7 +1,8 @@
 """Wspólne ustawienia danych S1 — jedno miejsce dla wszystkich skryptów.
 
 Co tu jest:
-    lata i miesiące do pobrania, obszar, lista zmiennych ERA5-Land, foldery i próg pól.
+    lata i miesiące do pobrania, obszar, lista zmiennych ERA5-Land, foldery, próg pól
+    i ścieżki w HDFS.
 
 Teoria:
     S1 działa w sezonie 21.03–30.09, a bilans wody liczymy z 60 dni wstecz,
@@ -38,6 +39,14 @@ ACCUMULATED = ["tp", "pev", "ssrd"]
 
 MIN_CROPLAND_SHARE = 0.2
 
+# HDFS: kontener, przez który wrzucamy pliki (na masterze "namenode", na workerze "datanode")
+HDFS_CONTAINER = "namenode"
+HDFS_RAW_DIR = "/era5land/raw"
+
 
 def raw_file(year, month):
     return RAW_DIR / f"era5land_{year}_{month:02d}.nc"
+
+
+def hdfs_file(year, month):
+    return f"{HDFS_RAW_DIR}/era5land_{year}_{month:02d}.nc"
