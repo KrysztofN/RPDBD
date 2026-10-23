@@ -1,4 +1,7 @@
 Requirements.txt
-data/
+/data/
 __pycache__/
 .env
+**/raw/
+*.nc
+*.part

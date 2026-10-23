@@ -73,13 +73,51 @@ flowchart LR
 - **G:** dla regionu i roku: uzupełnienie luk → wygładzenie (Savitzky–Golay) → start/koniec = 50% wysokości górki, szczyt = maksimum.
 - **H:** (1) nagły spadek NDVI poniżej wygładzonej krzywej z G; (2) sezon poniżej mediany z lat 2001–2017. Normy nie liczymy z lat 2018–2024, bo zawierają testowane susze.
 
-S1, S2, B1, B2 rozpisują ich autorzy według tego samego wzoru.
+S2, B1, B2 rozpisują ich autorzy według tego samego wzoru co S1 poniżej.
+
+### S1. Potrzeba nawodnienia (strumień)
+
+**Co robi:** w sezonie (21.03–30.09) codziennie sprawdza dla każdego powiatu, czy polom brakuje wody. Wynik to mapa: zielony = OK, żółty = ostrzeżenie, czerwony = alarm, a przy alarmie e-mail.
+
+**Po czym poznajemy brak wody (2 sygnały):**
+1. Przez ostatnie 60 dni wyparowało dużo więcej wody, niż spadło deszczu (bilans: < −100 mm ostrzeżenie, < −150 mm alarm).
+2. Gleba jest bardziej sucha niż zwykle o tej porze roku.
+
+**Jakie dane:** tylko pogoda ERA5-Land, 9 zmiennych:
+- opad,
+- temperatura, punkt rosy, wiatr (2 składowe), promieniowanie słoneczne, ciśnienie — z nich liczymy parowanie,
+- wilgotność gleby na 3 głębokościach.
+
+Do tego wspólne tabele od reszty zespołu: granice powiatów i mapa pól (liczymy tylko punkty, gdzie są pola).
+
+**Jak zdobyć dane:** pobieramy **raz, masowo** — nie odpytujemy API w trakcie działania.
+1. Konto Copernicus CDS (sekcja 3).
+2. Skrypt pobiera 1 plik = 1 miesiąc całej Polski ze wszystkimi zmiennymi; 2010–2024 to 180 plików. Ten sam plik służy D i S2, więc pobiera go jedna osoba dla wszystkich.
+3. Pliki trafiają do HDFS, Spark zamienia je na tabelę (godzina × punkt).
+4. Replay czyta tę tabelę i wysyła do Kafki godzina po godzinie, jakby dane przychodziły na żywo. S1 czyta z Kafki.
+
+**Test:** susza 2018 → alarmy od maja–czerwca na zachodzie i w centrum Polski; mokry rok (2010 lub 2017) → brak alarmów; zgodność z raportami suszy IUNG.
+
+**Co pokazujemy profesorowi (rozproszenie):**
+- Kafka na 3 węzłach — dane podzielone na części, awaria jednego węzła nie zatrzymuje strumienia.
+- Spark na kilku węzłach — w trakcie demo dokładamy węzły i obliczenia przyspieszają.
+- Po awarii joba wznawia od miejsca przerwania, bez utraty danych.
+- Złe rekordy trafiają do osobnej kolejki, reszta liczy się dalej.
+- Grafana pokazuje mapę, obciążenie strumienia i wysyła e-mail przy alarmie.
+
+**Narzędzia w S1:**
+- **Airflow** — jednym przyciskiem przygotowuje dane po kolei: pliki pogody → tabela → parowanie → normy wilgotności → start replayu.
+- **Kafka UI** — podgląd w przeglądarce: płynące wiadomości, podział na części, czy S1 nadąża czytać.
+- **Prometheus + cAdvisor** — obciążenie kontenerów i tempo strumienia na wykresach w Grafanie.
+- **GitHub Actions** — po każdym pushu testy S1 na małej próbce (np. 80 dni bez deszczu → musi wyjść alarm).
+- **Lokalny model AI (Ollama)** — przy alarmie dostaje liczby z bazy (bilans, wilgotność, dni bez deszczu) i pisze krótki komunikat po polsku do e-maila. Działa na naszym serwerze, bez płatnego API; mały model (np. polski Bielik albo Qwen 2.5 3B — wybór po teście na serwerze). Model tylko opisuje, nic nie liczy.
 
 ## 6. Narzędzia
 
 - **Rdzeń:** Docker Swarm, HDFS + Parquet, Kafka, Spark (batch + Structured Streaming), ClickHouse, Grafana.
-- **Dodatki:** Airflow, Kafka UI, Prometheus + cAdvisor, kontrola jakości danych (pandera), GitHub Actions.
-- **Jeśli starczy czasu:** MLflow (B2), opis alertów przez model AI.
+- **Dodatki:** Airflow, Kafka UI, Schema Registry (Avro), Prometheus + cAdvisor, Grafana Alerting, kontrola jakości danych (pandera), GitHub Actions.
+- **AI:** opis alertów po polsku przez lokalny model (Ollama).
+- **Jeśli starczy czasu:** MLflow (B2).
 
 ## 7. Jak sprawdzamy wyniki
 
