@@ -1,0 +1,23 @@
+# Bielik API na jednym serwerze: Ollama (model) + api (FastAPI).
+# Ollama nie ma portu na zewnatrz (nie ma hasla); z zewnatrz widac tylko API na porcie 8000.
+# Uruchomienie z katalogu AI/: API_KEY=<klucz> docker compose up -d --build
+services:
+  ollama:
+    image: ollama/ollama:0.34.1
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h        # model zostaje w RAM miedzy zapytaniami
+    volumes: [ollama-models:/root/.ollama]
+    restart: unless-stopped
+
+  api:
+    build: .
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      MODEL: hf.co/speakleash/Bielik-11B-v3.0-Instruct-GGUF:Q4_K_M
+      API_KEY: ${API_KEY:-}
+    ports: ["8000:8000"]
+    depends_on: [ollama]
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
