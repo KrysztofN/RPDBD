@@ -61,19 +61,17 @@ flowchart LR
 
 | Id | Proces | Tor | Wejście → wynik |
 | --- | --- | --- | --- |
-| S1 | Potrzeba nawodnienia | strumień | opad, ET₀, wilgotność gleby → sygnał „brak wody” |
-| S2 | Przymrozki | strumień | temperatura powietrza i gleby → alert |
-| **D** | Wymarzanie ozimin | strumień | temperatura + śnieg → ryzyko dla województwa |
+| S1 | Potrzeba nawodnienia | strumień | (ERA5-Land) opad, ET₀, wilgotność gleby → sygnał „brak wody” |
+| S2 | Przymrozki | strumień | (ERA5-Land) temperatura powietrza i gleby → alert |
+| D | Wymarzanie ozimin | strumień | (IMGW) temperatura + śnieg → ryzyko dla województwa |
 | B1 | Stan upraw | batch | NDVI → regiony powyżej/poniżej normy 2001–2017 |
-| B2 | Prognoza plonów | batch | NDVI + pogoda + plony GUS (2010–2024, 240 obserwacji na uprawę) → plon |
-| **G** | Fenologia | batch | krzywa NDVI → start, szczyt, koniec sezonu |
-| **H** | Anomalie NDVI | batch | NDVI + bilans wodny → regiony i daty do kontroli |
+| B2 | Fenologia | batch | krzywa NDVI → start, szczyt, koniec sezonu |
+| G | Prognoza plonów | batch | NDVI + pogoda (ERA5-Land?/IMGW?) + plony GUS (2010–2024, 240 obserwacji na uprawę) → plon |
+| H | Anomalie NDVI | batch | NDVI + bilans wodny → regiony i daty do kontroli |
 
-- **D:** godzina groźna = temperatura < progu (tabela w sekcji 2). Okno 72 h; alarm, gdy ≥ 50% punktów z oziminami w województwie ma ≥ 6 groźnych godzin (ostrzeżenie ≥ 30%).
-- **G:** dla regionu i roku: uzupełnienie luk → wygładzenie (Savitzky–Golay) → start/koniec = 50% wysokości górki, szczyt = maksimum.
-- **H:** (1) nagły spadek NDVI poniżej wygładzonej krzywej z G; (2) sezon poniżej mediany z lat 2001–2017. Normy nie liczymy z lat 2018–2024, bo zawierają testowane susze.
-
-S1, S2, B1, B2 rozpisują ich autorzy według tego samego wzoru.
+- D: godzina groźna = temperatura < progu (tabela w sekcji 2). Okno 72 h; alarm, gdy ≥ 50% punktów z oziminami w województwie ma ≥ 6 groźnych godzin (ostrzeżenie ≥ 30%).
+- S1 dla regionu i roku: uzupełnienie luk → wygładzenie (Savitzky–Golay) → start/koniec = 50% wysokości górki, szczyt = maksimum.
+- H: (1) nagły spadek NDVI poniżej wygładzonej krzywej z G; (2) sezon poniżej mediany z lat 2001–2017. Normy nie liczymy z lat 2018–2024, bo zawierają testowane susze.
 
 ## 6. Narzędzia
 
