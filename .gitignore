@@ -5,3 +5,6 @@ __pycache__/
 **/raw/
 *.nc
 *.part
+
+docs/
+CLAUDE.md
