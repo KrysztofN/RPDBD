@@ -1,0 +1,102 @@
+# Airflow 3: harmonogram i uruchamianie kroków przetwarzania (np. co 16 dni: NDVI -> B1, B2 -> biuletyn).
+#
+# Wszystko na masterze, sieć „host”. Zadania uruchamia scheduler (LocalExecutor) jako kontenery rbd-python
+# przez DockerOperator — ten sam obraz co Spark i pobieranie, więc Airflow nie potrzebuje naszych bibliotek.
+# Dlatego scheduler ma dostęp do Dockera (docker.sock + grupa docker, na masterze GID 988) — to daje mu pełną
+# kontrolę nad Dockerem na masterze (akceptowalne w klastrze za VPN). Przy innym GID grupy docker: zmienić `user`.
+# Porty: 8091 = strona WWW / API (8080 zajmuje Spark), 5432 = PostgreSQL tylko na 127.0.0.1.
+# DAG-i: katalogi */dags z kodu na klastrze (~/rbd-build/app) montowane do /opt/airflow/dags/<proces>.
+#
+# Sekrety w ~/rbd-build/airflow/.env (NIE w repo): POSTGRES_PASSWORD, AIRFLOW_FERNET_KEY, AIRFLOW_JWT_SECRET,
+# AIRFLOW_API_SECRET_KEY, AIRFLOW_ADMIN_PASSWORD.
+# Wdrożenie (na masterze, w katalogu z tym plikiem):
+#   set -a; . ./.env; set +a
+#   docker stack deploy -c stack.yml rbd-airflow
+# Wejście: http://10.7.11.21:8091 (admin)
+
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD}@127.0.0.1:5432/airflow
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+  AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://127.0.0.1:8091/execution/
+  AIRFLOW__API__BASE_URL: http://10.7.11.21:8091
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+  AIRFLOW__CORE__DEFAULT_TIMEZONE: Europe/Warsaw
+
+x-airflow: &airflow
+  image: apache/airflow:3.3.2-python3.10
+  environment: *airflow-env
+  networks: [hostnet]
+  volumes: &airflow-volumes
+    - airflow-logs:/opt/airflow/logs
+    - ${HOME}/rbd-build/app/infra/airflow/dags:/opt/airflow/dags/infra:ro
+  deploy: &airflow-deploy
+    placement:
+      constraints: [node.role == manager]
+    restart_policy:
+      condition: any
+      delay: 10s
+
+services:
+  postgres:
+    image: postgres:17.10
+    command: postgres -c listen_addresses=127.0.0.1
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: airflow
+    volumes: [airflow-postgres:/var/lib/postgresql/data]
+    networks: [hostnet]
+    deploy: *airflow-deploy
+
+  airflow-init:            # jednorazowo: migracja bazy + konto admin (potem kończy pracę)
+    <<: *airflow
+    command: version
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+    deploy:
+      <<: *airflow-deploy
+      restart_policy:
+        condition: on-failure      # ponawia, dopóki PostgreSQL nie wstanie
+        delay: 15s
+        max_attempts: 10
+
+  api-server:
+    <<: *airflow
+    command: api-server --port 8091
+
+  scheduler:
+    <<: *airflow
+    command: scheduler
+    volumes:
+      - airflow-logs:/opt/airflow/logs
+      - ${HOME}/rbd-build/app/infra/airflow/dags:/opt/airflow/dags/infra:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # grupa docker na masterze (GID 988) jako grupa główna -> dostęp do docker.sock
+    # (Swarm nie obsługuje group_add; katalogi Airflow należą do UID 50000, więc zmiana grupy ich nie blokuje)
+    user: "50000:988"
+
+  dag-processor:
+    <<: *airflow
+    command: dag-processor
+
+  triggerer:
+    <<: *airflow
+    command: triggerer
+
+volumes:
+  airflow-postgres:
+  airflow-logs:
+
+networks:
+  hostnet:
+    external: true
+    name: host

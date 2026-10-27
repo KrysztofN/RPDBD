@@ -1,0 +1,46 @@
+# Grafana: mapy i wykresy z wyników w ClickHouse (B1, B2, później reszta procesów).
+#
+# Usługa na masterze, sieć „host”, port 3000, dane (dashboardy, użytkownicy) w wolumenie lokalnym.
+# Wtyczka ClickHouse instaluje się przy starcie; połączenie z ClickHouse jest w datasource.yml (bez klikania).
+# Hasła tylko w plikach .env na klastrze (nie w repo):
+#   ~/rbd-build/grafana/.env     GF_SECURITY_ADMIN_PASSWORD=...
+#   ~/rbd-build/clickhouse/.env  CLICKHOUSE_PASSWORD=...
+#
+# Wdrożenie (na masterze, w katalogu z tym plikiem):
+#   set -a; . ./.env; . ../clickhouse/.env; set +a
+#   docker stack deploy -c stack.yml rbd-grafana
+# Wejście: http://10.7.11.21:3000  (użytkownik admin)
+
+services:
+  grafana:
+    image: grafana/grafana-oss:13.0.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_PLUGINS_PREINSTALL_SYNC: grafana-clickhouse-datasource@4.22.1
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}     # czyta datasource.yml
+    volumes:
+      - grafana-data:/var/lib/grafana
+    configs:
+      - source: grafana-datasource
+        target: /etc/grafana/provisioning/datasources/clickhouse.yml
+    networks: [hostnet]
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: any
+
+configs:
+  grafana-datasource:
+    file: ./datasource.yml
+
+volumes:
+  grafana-data:
+
+networks:
+  hostnet:
+    external: true
+    name: host

@@ -72,6 +72,7 @@ flowchart LR
 - D: godzina groźna = temperatura < progu (tabela w sekcji 2). Okno 72 h; alarm, gdy ≥ 50% punktów z oziminami w województwie ma ≥ 6 groźnych godzin (ostrzeżenie ≥ 30%).
 - S1 dla regionu i roku: uzupełnienie luk → wygładzenie (Savitzky–Golay) → start/koniec = 50% wysokości górki, szczyt = maksimum.
 - H: (1) nagły spadek NDVI poniżej wygładzonej krzywej z G; (2) sezon poniżej mediany z lat 2001–2017. Normy nie liczymy z lat 2018–2024, bo zawierają testowane susze.
+- **B1 + B2 — biuletyn stanu upraw (plan).** Co 16 dni w sezonie (IV–IX) i raz w roku (podsumowanie w październiku) powstaje automatyczny biuletyn PDF dla każdego powiatu ziemskiego, na wzór biuletynu JRC MARS: B1 pokazuje stan upraw na tle normy 2001–2017, B2 przebieg sezonu (start, szczyt, koniec) względem typowych dat, a model Bielik dopisuje komentarz analityka z możliwą przyczyną. Mapa upraw EUCROPMAP (JRC) daje strukturę upraw powiatu i osobne krzywe dla grup upraw (ozime i rzepak, jare zboża, kukurydza, okopowe, łąki) w latach, dla których mapa istnieje. Biuletyn składamy w LaTeX: 2 strony w dwóch kolumnach, jak krótki raport naukowy (podsumowanie roczne ok. 4 strony). Biuletyn trafia mailem do osób, które zapisały się na dany powiat. B1 i B2 liczymy osobno ze wspólnej krzywej NDVI, w osobnych DAG-ach Airflow, które startują same, gdy pojawią się ich dane wejściowe (Airflow Datasets). Komentarze Bielika i PDF-y powstają asynchronicznie przez kolejkę w Kafce, więc obliczenia nie czekają na model.
 
 ## 6. Narzędzia
 

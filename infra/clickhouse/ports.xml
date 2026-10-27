@@ -1,0 +1,6 @@
+<!-- Porty ClickHouse na klastrze: natywny 9001, bo 9000 zajmuje HDFS (NameNode RPC); oba w sieci maszyny. -->
+<clickhouse>
+    <http_port>8123</http_port>
+    <tcp_port>9001</tcp_port>
+    <listen_host>0.0.0.0</listen_host>
+</clickhouse>

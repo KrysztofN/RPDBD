@@ -1,0 +1,41 @@
+# Spark standalone w Docker Swarm: 1 master (na maszynie master) + 1 worker na każdym workerze klastra.
+#
+# Po co: rozproszone obliczenia (np. NDVI per powiat z 552 zdjęć na HDFS). Swarm uruchamia usługi na właściwych
+# maszynach i podnosi je po awarii. Sieć „host” — Spark widzi HDFS i inne maszyny pod zwykłymi adresami.
+# Zasoby workera: 6 z 8 rdzeni i 40 z 62 GB RAM (reszta dla DataNode'a HDFS i systemu).
+#
+# Wdrożenie (na masterze; obraz rbd-python:0.1 musi być zbudowany na każdej maszynie — nie mamy rejestru):
+#   docker stack deploy -c infra/spark/stack.yml --resolve-image never rbd-spark
+# Podgląd: http://10.7.11.21:8080 (master), http://<worker>:8081 (workery)
+# Usunięcie: docker stack rm rbd-spark
+
+services:
+  spark-master:
+    image: rbd-python:0.1
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      --host 10.7.11.21 --port 7077 --webui-port 8080
+    networks: [hostnet]
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: any
+
+  spark-worker:
+    image: rbd-python:0.1
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://10.7.11.21:7077 --cores 6 --memory 40g --webui-port 8081
+    networks: [hostnet]
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.role == worker]
+      restart_policy:
+        condition: any
+
+networks:
+  hostnet:
+    external: true
+    name: host

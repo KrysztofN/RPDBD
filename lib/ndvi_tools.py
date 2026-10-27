@@ -3,7 +3,7 @@ Wspólne funkcje NDVI dla procesów B1, B2, G, H (umieścić jako lib/ndvi_tools
 
 Warstwy:
   1. Dostęp do Planetary Computer: stac_search, sign_href, list_modis_items
-  2. Raster -> region: read_modis_ndvi, rasterize_regions, cropland_fraction_on_grid,
+  2. Raster -> region: modis_tile_grids, read_modis_ndvi, rasterize_regions, cropland_fraction_on_grid,
      build_tile_grid, process_item, aggregate_tiles, build_regional_ndvi
   3. Szeregi czasowe (B1/B2/G/H): add_time_keys, complete_grid, interpolate_gaps,
      savgol_smooth, smooth_regional_series, prepare_series
@@ -126,9 +126,17 @@ def sign_href(href: str, safety_s: int = 300) -> str:
         return signed
 
 
+def _full_datetime(interval: str) -> str:
+    """'2018-01-01/2018-12-31' -> '2018-01-01T00:00:00Z/2018-12-31T23:59:59Z' (same daty -> początek / koniec dnia)."""
+    parts = interval.split("/")
+    suffixes = ["T00:00:00Z", "T23:59:59Z"]
+    return "/".join(p + suffixes[min(i, 1)] if len(p) == 10 else p for i, p in enumerate(parts))
+
+
 def stac_search(collection: str, datetime: str, bbox: Sequence[float] = POLAND, limit: int = 100) -> list[dict]:
-    """Wyszukiwanie STAC z paginacją (notebook 02 nie paginuje - limit 50 ucina wyniki)."""
-    body = {"collections": [collection], "bbox": list(bbox), "datetime": datetime, "limit": limit}
+    """Wyszukiwanie STAC z paginacją (notebook 02 nie paginuje - limit 50 ucina wyniki).
+    datetime: 'RRRR-MM-DD/RRRR-MM-DD' albo pełne daty; API wymaga pełnych dat z godziną, więc uzupełniamy."""
+    body = {"collections": [collection], "bbox": list(bbox), "datetime": _full_datetime(datetime), "limit": limit}
     url, out = STAC, []
     while url:
         js = _request("POST", url, json=body).json()
@@ -188,6 +196,19 @@ def read_modis_ndvi(ndvi_href: str, reliability_href: str, decimation: int = 1,
     valid = (raw != NDVI_NODATA) & (raw >= -2000) & (raw <= 10000) & np.isin(rel, list(ok_reliability))
     ndvi = np.where(valid, raw.astype(np.float32) * np.float32(NDVI_SCALE), np.nan).astype(np.float32)
     return ndvi, transform, crs
+
+
+def modis_tile_grids(year: int = 2018, decimation: int = 1) -> list[tuple[str, Affine, object, tuple[int, int]]]:
+    """Siatki kafelków MODIS nad Polską: [(kafelek, transform, crs, (wiersze, kolumny))] — z pierwszego terminu roku."""
+    items = list_modis_items(year, year)
+    first = items[items["date"] == items["date"].min()]
+    grids = []
+    for _, it in first.iterrows():
+        with rasterio.Env(**_GDAL_OPTS), rasterio.open(sign_href(it["ndvi_href"])) as src:
+            shape = (src.height // decimation, src.width // decimation)
+            transform = src.transform * Affine.scale(src.width / shape[1], src.height / shape[0])
+            grids.append((it["tile"], transform, src.crs, shape))
+    return grids
 
 
 def rasterize_regions(regions, crs, transform: Affine, shape: tuple[int, int]) -> np.ndarray:
