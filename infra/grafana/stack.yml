@@ -20,12 +20,19 @@ services:
       GF_PLUGINS_PREINSTALL_SYNC: grafana-clickhouse-datasource@4.22.1
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_PANELS_ENABLE_ALPHA: "true"                  # warstwa mapy „Dynamic GeoJSON” (kształty powiatów) jest alpha
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}     # czyta datasource.yml
     volumes:
       - grafana-data:/var/lib/grafana
+      # dashboardy z repo (pliki JSON); zmiana pliku na klastrze = nowy dashboard po ok. 30 s, bez restartu
+      - ${HOME}/rbd-build/app/infra/grafana/dashboards:/etc/grafana/dashboards:ro
+      # granice powiatów (GeoJSON) dla mapy: w przeglądarce pod public/maps/rbd/counties.geojson
+      - ${HOME}/rbd-build/app/infra/grafana/maps:/usr/share/grafana/public/maps/rbd:ro
     configs:
       - source: grafana-datasource
         target: /etc/grafana/provisioning/datasources/clickhouse.yml
+      - source: grafana-dashboards
+        target: /etc/grafana/provisioning/dashboards/rbd.yml
     networks: [hostnet]
     deploy:
       placement:
@@ -36,6 +43,8 @@ services:
 configs:
   grafana-datasource:
     file: ./datasource.yml
+  grafana-dashboards:
+    file: ./dashboards.yml
 
 volumes:
   grafana-data:

@@ -1,0 +1,622 @@
+{
+  "uid": "rbd-b2",
+  "title": "B2 — przebieg sezonu per powiat",
+  "description": "Start, szczyt i koniec sezonu z krzywej NDVI pól (50% wysokości „górki”) na tle typowych dat (norma krocząca 15 lat). Źródło: ClickHouse rbd.b2_phenology.",
+  "tags": [
+    "rbd",
+    "b2"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 41,
+  "time": {
+    "from": "2000-01-01T00:00:00.000Z",
+    "to": "2000-12-31T23:59:59.000Z"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "year",
+        "label": "Rok",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse-rbd"
+        },
+        "query": "SELECT DISTINCT toString(year) FROM rbd.b2_phenology ORDER BY 1 DESC",
+        "definition": "SELECT DISTINCT toString(year) FROM rbd.b2_phenology ORDER BY 1 DESC",
+        "current": {
+          "text": "2018",
+          "value": "2018"
+        },
+        "refresh": 1
+      },
+      {
+        "name": "metric",
+        "label": "Etap sezonu",
+        "type": "custom",
+        "query": "start : start,szczyt : peak,koniec : end",
+        "current": {
+          "text": "koniec",
+          "value": "end"
+        },
+        "options": [
+          {
+            "text": "start",
+            "value": "start",
+            "selected": false
+          },
+          {
+            "text": "szczyt",
+            "value": "peak",
+            "selected": false
+          },
+          {
+            "text": "koniec",
+            "value": "end",
+            "selected": true
+          }
+        ]
+      },
+      {
+        "name": "county",
+        "label": "Powiat",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "clickhouse-rbd"
+        },
+        "query": "SELECT concat(county_name, ' – ', voiv_name, ' (', region_id, ')') FROM rbd.counties WHERE is_city = 0 ORDER BY county_name",
+        "definition": "SELECT concat(county_name, ' – ', voiv_name, ' (', region_id, ')') FROM rbd.counties WHERE is_city = 0 ORDER BY county_name",
+        "regex": "/^(?<text>.*) \\((?<value>\\d{4})\\)$/",
+        "current": {
+          "text": "powiat kościański – wielkopolskie",
+          "value": "3011"
+        },
+        "refresh": 1,
+        "sort": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "geomap",
+      "title": "$year: ${metric:text} sezonu — przesunięcie względem typowej daty (dni)",
+      "description": "Niebieski: wcześniej niż zwykle, zielony: typowo, pomarańczowy: później niż zwykle (próg: przesunięcie ≥ max(8 dni, typowy rozrzut dat w powiecie)). W dymku: data i przesunięcie w dniach. Pola orne.",
+      "gridPos": {
+        "h": 14,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-rbd"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT region_id, county_name AS powiat, multiIf(${metric:raw}_status = 'wcześniej niż zwykle', -1, ${metric:raw}_status = 'później niż zwykle', 1, 0) AS ocena, round(${metric:raw}_shift) AS przesuniecie_dni, formatDateTime(${metric:raw}_date, '%d.%m') AS data, ${metric:raw}_status AS status FROM rbd.b2_phenology WHERE crop_class = 'arable' AND year = ${year:raw}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": -0.5
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": {
+          "id": "coords",
+          "lat": 52.0,
+          "lon": 19.3,
+          "zoom": 5.6
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": true,
+          "showAttribution": true
+        },
+        "basemap": {
+          "type": "osm-standard",
+          "name": "OpenStreetMap"
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "layers": [
+          {
+            "type": "dynamic-geojson",
+            "name": "Powiaty",
+            "config": {
+              "src": "public/maps/rbd/counties.geojson",
+              "idField": "region_id",
+              "rules": [],
+              "style": {
+                "color": {
+                  "fixed": "#808080"
+                },
+                "opacity": 0.15,
+                "lineWidth": 0.5
+              },
+              "dataStyle": {
+                "color": {
+                  "field": "ocena",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.75
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "type": "barchart",
+      "title": "${metric:text} sezonu: ile powiatów wcześniej / później niż zwykle (z 314)",
+      "gridPos": {
+        "h": 14,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-rbd"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT toString(year) AS rok, countIf(${metric:raw}_status = 'wcześniej niż zwykle') AS wczesniej, countIf(${metric:raw}_status = 'później niż zwykle') AS pozniej FROM rbd.b2_phenology WHERE crop_class = 'arable' GROUP BY year ORDER BY year"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wczesniej"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "wcześniej niż zwykle"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pozniej"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "później niż zwykle"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "rok",
+        "orientation": "vertical",
+        "stacking": "none",
+        "showValue": "never",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Daty sezonu pól ornych: wybrany powiat, wszystkie lata",
+      "description": "Daty (dzień.miesiąc) i przesunięcie w dniach względem typowej daty (+ później, - wcześniej). Norma: 15 poprzednich lat bez lat skrajnych (do 2010: lata 2001–2017).",
+      "gridPos": {
+        "h": 13,
+        "w": 14,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-rbd"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT year AS rok, formatDateTime(start_date, '%d.%m') AS start, round(start_shift) AS start_dni, formatDateTime(peak_date, '%d.%m') AS szczyt, round(peak_shift) AS szczyt_dni, formatDateTime(end_date, '%d.%m') AS koniec, round(end_shift) AS koniec_dni, round(length_days) AS dlugosc_dni, round(peak_ndvi, 2) AS ndvi_szczyt FROM rbd.b2_phenology WHERE crop_class = 'arable' AND region_id = ${county:singlequote} ORDER BY year DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*_dni$"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "blue",
+                      "value": null
+                    },
+                    {
+                      "color": "text",
+                      "value": -7.5
+                    },
+                    {
+                      "color": "orange",
+                      "value": 7.5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "dlugosc_dni"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "długość (dni)"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Grupy upraw w wybranym powiecie (lata mapy upraw: 2018 i 2022)",
+      "description": "Osobne krzywe NDVI z „czystych” pikseli grupy (≥ 75% powierzchni, min. 50 pikseli). Pokazuje, że np. zboża ozime kończą sezon w czerwcu–lipcu, a kukurydza we wrześniu.",
+      "gridPos": {
+        "h": 13,
+        "w": 10,
+        "x": 14,
+        "y": 26
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-rbd"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT multiIf(crop_class = 'winter_cereals_rapeseed', 'zboża ozime i rzepak', crop_class = 'spring_cereals', 'zboża jare', crop_class = 'maize', 'kukurydza', crop_class = 'root_crops', 'okopowe', crop_class = 'grassland', 'łąki i pastwiska', crop_class = 'other_crops', 'inne uprawy', 'pola orne (wszystkie)') AS grupa, year AS rok, formatDateTime(start_date, '%d.%m') AS start, formatDateTime(peak_date, '%d.%m') AS szczyt, formatDateTime(end_date, '%d.%m') AS koniec, round(peak_ndvi, 2) AS ndvi_szczyt FROM rbd.b2_phenology WHERE region_id = ${county:singlequote} AND year IN (2018, 2022) ORDER BY grupa, rok"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Krzywa NDVI pól: wybrany powiat, rok $year, na tle normy (start/koniec = 50% wysokości „górki”)",
+      "description": "Szare pasmo: norma (25–75% lat 2001–2017 bez lat skrajnych).  Oś X: miesiące wybranego roku.",
+      "gridPos": {
+        "h": 12,
+        "w": 16,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-rbd"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(makeDate(2000, toMonth(date), toDayOfMonth(date))) AS time, round(norm_p25, 3) AS norma_p25, round(norm_p75, 3) AS norma_p75, round(norm_mean, 3) AS norma, round(ndvi_smooth, 3) AS ndvi_wygladzone, round(ndvi_mean, 3) AS ndvi_pomiar FROM rbd.b1_periods WHERE region_id = ${county:singlequote} AND year = ${year:raw} ORDER BY time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "fillOpacity": 0
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "norma_p75"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#bbbbbb"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.fillBelowTo",
+                "value": "norma_p25"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 25
+              },
+              {
+                "id": "displayName",
+                "value": "norma (25–75%)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "norma_p25"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#bbbbbb"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": false,
+                  "viz": false
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "time:DD.MM"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "norma"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#777777"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    6,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "norma (średnia)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ndvi_wygladzone"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "dark-green"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              },
+              {
+                "id": "displayName",
+                "value": "NDVI $year (wygładzone)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ndvi_pomiar"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "always"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 6
+              },
+              {
+                "id": "displayName",
+                "value": "NDVI $year (pomiar)"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Sezon $year w powiecie: data i przesunięcie (dni)",
+      "description": "Data etapu sezonu (pola orne) i przesunięcie względem typowej daty (+ później, - wcześniej).",
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse-rbd"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT concat(formatDateTime(start_date, '%d.%m'), ' (', toString(round(start_shift)), ' d)') AS start, concat(formatDateTime(peak_date, '%d.%m'), ' (', toString(round(peak_shift)), ' d)') AS szczyt, concat(formatDateTime(end_date, '%d.%m'), ' (', toString(round(end_shift)), ' d)') AS koniec FROM rbd.b2_phenology WHERE crop_class = 'arable' AND region_id = ${county:singlequote} AND year = ${year:raw}"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "orientation": "vertical",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    }
+  ]
+}

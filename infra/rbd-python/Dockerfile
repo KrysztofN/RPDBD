@@ -2,6 +2,8 @@
 #
 # Po co: maszyny klastra mają goły Python (bez numpy, rasterio). Jeden obraz działa tak samo na wszystkich
 # 5 maszynach — do pobierania NDVI na HDFS (lib/modis_ingest.py) i jako baza Sparka (driver i executory).
+# cdsapi + xarray + netCDF4: pogoda ERA5-Land z Copernicus CDS (pliki NetCDF). Wersje xarray/netCDF4 — ostatnie
+# zgodne z Pythonem 3.10 z obrazu Sparka.
 #
 # Budowa (na maszynie z Dockerem, z katalogu głównego repo):
 #   docker build -t rbd-python:0.1 infra/rbd-python
@@ -22,7 +24,10 @@ RUN python3 -m pip install --no-cache-dir \
         geopandas==1.0.1 \
         affine==2.4.0 \
         rasterio==1.4.3 \
-        requests==2.32.3
+        requests==2.32.3 \
+        cdsapi==0.7.7 \
+        xarray==2025.6.1 \
+        netCDF4==1.7.4
 
 # kod projektu montujemy przy uruchomieniu (-v ~/RPDBD:/app), dzięki temu `python -m lib...` działa bez przebudowy
 WORKDIR /app

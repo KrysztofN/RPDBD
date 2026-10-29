@@ -73,3 +73,43 @@ def load_counties(data_dir: str | Path = "data", only_rural: bool = False) -> gp
     if only_rural:
         out = out[~out["is_city"]]
     return out.sort_values("region_id").reset_index(drop=True)
+
+
+def export_counties_geojson(out_path: str | Path, data_dir: str | Path = "data", tolerance_m: float = 250) -> Path:
+    """
+    Granice powiatów jako GeoJSON dla map w przeglądarce (np. Grafana, warstwa Dynamic GeoJSON):
+    WGS84 (EPSG:4326), uproszczone (tolerance_m, w metrach — mniejszy plik, szybsza mapa),
+    `id` każdego obiektu = kod TERYT (Grafana dopasowuje po nim dane z zapytania), właściwości: nazwa, województwo.
+    Uproszczenie z zachowaniem topologii (sąsiednie powiaty bez dziur i zakładek).
+    """
+    import json
+
+    counties = load_counties(data_dir)
+    simplified = counties.geometry.simplify_coverage(tolerance_m) if hasattr(counties.geometry, "simplify_coverage") \
+        else counties.geometry.simplify(tolerance_m, preserve_topology=True)
+    gdf = counties.set_geometry(simplified).to_crs("EPSG:4326")
+    features = []
+    for row, geom in zip(gdf.itertuples(), gdf.geometry):
+        features.append({"type": "Feature", "id": row.region_id,
+                         "properties": {"region_id": row.region_id, "name": row.name, "voiv_name": row.voiv_name},
+                         "geometry": json.loads(gpd.GeoSeries([geom]).to_json())["features"][0]["geometry"]})
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({"type": "FeatureCollection", "features": features},
+                                   ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    log.info("GeoJSON powiatów: %d obiektów -> %s (%.1f MB, uproszczenie %.0f m)",
+             len(features), out_path, out_path.stat().st_size / 1e6, tolerance_m)
+    return out_path
+
+
+if __name__ == "__main__":
+    # python -m lib.boundaries geojson <plik.geojson> [tolerancja_m]
+    import sys
+
+    from .log import setup_logging
+
+    setup_logging()
+    if len(sys.argv) >= 3 and sys.argv[1] == "geojson":
+        export_counties_geojson(sys.argv[2], tolerance_m=float(sys.argv[3]) if len(sys.argv) > 3 else 250)
+    else:
+        print("użycie: python -m lib.boundaries geojson <plik.geojson> [tolerancja_m]")
