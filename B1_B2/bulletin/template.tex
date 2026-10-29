@@ -1,0 +1,141 @@
+% Biuletyn stanu upraw (B1 + B2) — szablon LaTeX wypełniany przez B1_B2/bulletin/build_bulletin.py (Jinja2).
+% Znaczniki Jinja2: VAR = wstawiona wartość, BLOCK = logika (pętla, warunek) — zamiast podwójnych klamr, bo klamry są w LaTeX.
+% Wszystkie teksty z danych są „oczyszczone” z %, &, _, #, $ w build_bulletin.py (filtr tex).
+\documentclass[10pt,a4paper,twocolumn]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[polish]{babel}
+\usepackage{lmodern}
+\usepackage[a4paper,top=1.3cm,bottom=1.5cm,left=1.4cm,right=1.4cm,columnsep=0.7cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{tabularx}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{microtype}
+\usepackage{caption}
+
+\definecolor{worse}{HTML}{D7301F}
+\definecolor{normal}{HTML}{2E8B57}
+\definecolor{better}{HTML}{2C6FBB}
+\definecolor{late}{HTML}{E6862E}
+\definecolor{muted}{HTML}{6B6B6B}
+\definecolor{boxbg}{HTML}{F2F4F3}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titlespacing*{\section}{0pt}{1.0ex}{0.5ex}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45ex}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[L]{\footnotesize\color{muted} Biuletyn stanu upraw · \VAR{county_name|tex} · wydanie \VAR{edition|tex}}
+\fancyfoot[R]{\footnotesize\color{muted} strona \thepage{} z \pageref{LastPage}}
+
+\newcommand{\kpi}[3]{%
+  \colorbox{boxbg}{\begin{minipage}[t][1.55cm]{0.225\textwidth}\centering
+    \vspace{0.15cm}{\footnotesize\color{muted}#1}\\[0.1cm]
+    {\Large\bfseries #2}\\[0.05cm]{\scriptsize #3}\end{minipage}}}
+
+\begin{document}
+
+\twocolumn[{%
+  {\Large\bfseries Biuletyn stanu upraw}\hfill{\small\color{muted} wydanie \VAR{edition|tex}}\\[0.2cm]
+  {\large \VAR{county_name|tex}} {\color{muted}· województwo \VAR{voiv_name|tex} · TERYT \VAR{region_id|tex}}\\[0.1cm]
+  {\small Termin: \textbf{\VAR{period_label|tex}} \quad {\color{muted}(zdjęcia satelitarne MODIS, kompozyt 16-dniowy)}}\\[0.25cm]
+  \kpi{Zieloność pól}{\VAR{pct_of_norm|tex}}{\VAR{pct_caption|tex}}\hfill
+  \kpi{Stan upraw}{\textcolor{\VAR{status_color}}{\VAR{status_short|tex}}}{\VAR{status_caption|tex}}\hfill
+  \kpi{Start sezonu}{\VAR{start_kpi|tex}}{\VAR{start_caption|tex}}\hfill
+  \kpi{Faza sezonu}{\VAR{phase_short|tex}}{\VAR{phase_caption|tex}}
+  \vspace{0.35cm}
+}]
+
+\section*{Streszczenie}
+\VAR{summary|tex}
+
+{\footnotesize\color{muted}\VAR{summary_note|tex}}
+
+\section{Stan upraw (B1)}
+\VAR{b1_text|tex}
+
+\begin{center}\footnotesize
+\begin{tabularx}{\columnwidth}{@{}Xrrl@{}}
+\toprule
+Termin & \% normy & $z$ & Stan \\
+\midrule
+\BLOCK{for r in b1_rows}
+\VAR{r.label|tex} & \VAR{r.pct|tex} & \VAR{r.z|tex} & \textcolor{\VAR{r.color}}{\VAR{r.status|tex}} \\
+\BLOCK{endfor}
+\bottomrule
+\end{tabularx}
+\end{center}
+{\footnotesize\color{muted} Norma: \VAR{norm_years|tex}, bez lat skrajnych. $z$ = odchylenie od normy w jednostkach typowego rozrzutu; $|z|\ge 1$ oznacza wyraźne odchylenie.}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\columnwidth]{fig_curve.pdf}
+  \caption*{\footnotesize Krzywa NDVI pól ornych w \VAR{year} r. na tle normy (pasmo: 25--75\% typowych lat). Pionowe linie: start, szczyt i koniec sezonu (B2); kreska przerywana: termin wydania.}
+\end{figure}
+
+\section{Przebieg sezonu (B2)}
+\VAR{b2_text|tex}
+
+\begin{center}\footnotesize
+\begin{tabularx}{\columnwidth}{@{}Xllr@{}}
+\toprule
+Etap & Data & Typowo & Przesunięcie \\
+\midrule
+\BLOCK{for r in b2_rows}
+\VAR{r.stage|tex} & \VAR{r.date|tex} & \VAR{r.typical|tex} & \textcolor{\VAR{r.color}}{\VAR{r.shift|tex}} \\
+\BLOCK{endfor}
+\bottomrule
+\end{tabularx}
+\end{center}
+\BLOCK{if group_rows}
+{\footnotesize Grupy upraw (osobne krzywe z pikseli jednej uprawy, rok mapy upraw \VAR{year}):}
+\begin{center}\footnotesize
+\begin{tabularx}{\columnwidth}{@{}Xlll@{}}
+\toprule
+Grupa & Start & Szczyt & Koniec \\
+\midrule
+\BLOCK{for r in group_rows}
+\VAR{r.group|tex} & \VAR{r.start|tex} & \VAR{r.peak|tex} & \VAR{r.end|tex} \\
+\BLOCK{endfor}
+\bottomrule
+\end{tabularx}
+\end{center}
+\BLOCK{endif}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\columnwidth]{fig_map.pdf}
+  \caption*{\footnotesize Stan upraw w powiatach województwa (\VAR{voiv_name|tex}) w tym terminie (B1). \VAR{neighbours_text|tex}}
+\end{figure}
+
+\section{Struktura upraw}
+\VAR{structure_text|tex}
+
+\begin{center}
+  \includegraphics[width=0.95\columnwidth]{fig_structure.pdf}
+\end{center}
+
+\section{Warunki pogodowe}
+\VAR{weather_text|tex}
+
+\section{Ocena i możliwe przyczyny}
+\VAR{assessment_text|tex}
+
+\section*{Metoda i źródła}
+{\footnotesize
+NDVI: MODIS MOD13Q1 (NASA, 250\,m, co 16 dni), piksele pól ornych wg mapy upraw EUCROPMAP (JRC, \VAR{map_year}), bez chmur i śniegu.
+Krzywa wygładzona (Savitzky--Golay), luki do 48 dni uzupełniane. Norma: \VAR{norm_years|tex}, lata dalsze niż 1,5 odchylenia odrzucane.
+Fenologia: start i koniec sezonu = przejście przez 50\% wysokości rocznej „górki” NDVI, szczyt = maksimum (dokładność ok. $\pm$8 dni).
+Granice: GUGiK (PRG). Struktura upraw: EUCROPMAP (nie rozróżnia ozimin i jarych — grupy przybliżone).
+Ograniczenia: piksel 250\,m często łączy kilka pól; wynik dotyczy powiatu, nie pojedynczego gospodarstwa.
+\VAR{ai_note|tex}
+Wygenerowano automatycznie: \VAR{generated|tex}.\par}
+
+\end{document}

@@ -4,6 +4,7 @@ Prosty klient HDFS przez WebHDFS (HTTP) — bez instalowania klienta Hadoop w ko
 Co robi:
   WebHDFS(url, user).put(lokalny_plik, ścieżka_hdfs, replication=1)  — zapis pliku z podaną replikacją
   .exists(), .list(), .mkdirs(), .status()                            — odczyt informacji o plikach
+  .read_bytes(ścieżka_hdfs)                                           — odczyt małego pliku w całości
   Z linii poleceń: python -m lib.webhdfs put <plik|katalog> <katalog_hdfs> | ls <ścieżka>
 
 Trochę teorii:
@@ -98,6 +99,18 @@ class WebHDFS:
                                   headers={"Content-Type": "application/octet-stream"})
         r2.raise_for_status()
         log.debug("HDFS <- %s (%s, replikacja %d)", hdfs_path, Path(local_path).name, replication)
+
+    def read_bytes(self, hdfs_path: str) -> bytes:
+        """Odczyt całego pliku: NameNode -> przekierowanie -> DataNode (do małych plików, np. granic, tabel)."""
+        r = self.session.get(self._url(hdfs_path), params=self._params("OPEN"), allow_redirects=False,
+                             timeout=self.timeout)
+        if r.status_code != 307:
+            r.raise_for_status()
+            raise RuntimeError(f"WebHDFS OPEN {hdfs_path}: oczekiwano przekierowania 307, jest {r.status_code}")
+        r2 = self.session.get(self._resolve(r.headers["Location"]), timeout=self.timeout)
+        r2.raise_for_status()
+        log.debug("HDFS -> %s (%.1f MB)", hdfs_path, len(r2.content) / 1e6)
+        return r2.content
 
 
 # --------------------------------------------------------------------------- linia poleceń

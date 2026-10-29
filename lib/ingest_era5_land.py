@@ -54,6 +54,7 @@ VARIABLE_GROUPS = {
 }
 VARIABLES = [v for vs in VARIABLE_GROUPS.values() for v in vs]
 MIN_COMPLETE_BYTES = 1_000_000
+QUEUE_WAIT_S, QUEUE_RETRIES = 120, 60   # pełna kolejka CDS: czekamy 2 min, maks. ok. 2 h na zamówienie
 
 
 def file_kind(path: Path) -> str:
@@ -73,7 +74,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--webhdfs-url", default=DEFAULT_URL)
     p.add_argument("--hdfs-user", default=DEFAULT_USER)
     p.add_argument("--replication", type=int, default=1)
-    p.add_argument("--workers", type=int, default=4, help="ile zamówień naraz w kolejce CDS")
+    p.add_argument("--workers", type=int, default=2,
+                   help="ile zamówień naraz w kolejce CDS (limit na użytkownika; klucz jest wspólny dla zespołu)")
     p.add_argument("--cache-dir", default="data/era5_cache",
                    help="pobrane pliki czekają tu do udanej wysyłki na HDFS (ponowne uruchomienie ich nie zamawia)")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -122,7 +124,19 @@ def main() -> None:
             }
             part = cached.with_suffix(".part")
             with Timer(log, f"CDS {m} {group} (kolejka + pobranie)"):
-                client.retrieve(DATASET, request, str(part))
+                for attempt in range(QUEUE_RETRIES):
+                    try:
+                        client.retrieve(DATASET, request, str(part))
+                        break
+                    except Exception as e:           # CDS odrzuca zamówienie, gdy kolejka użytkownika jest pełna
+                        text = str(e)
+                        if attempt + 1 < QUEUE_RETRIES and ("Maximum number queued requests" in text
+                                                             or "has been rejected" in text):
+                            log.info("%s %s: kolejka CDS pełna — czekam %d s (próba %d)", m, group, QUEUE_WAIT_S,
+                                     attempt + 1)
+                            time.sleep(QUEUE_WAIT_S)
+                            continue
+                        raise
             part.rename(cached)                      # kompletny plik dostaje właściwą nazwę dopiero po pobraniu
         kind = file_kind(cached)
         size = cached.stat().st_size

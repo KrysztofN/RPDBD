@@ -91,6 +91,16 @@ def season_dates(doy: np.ndarray, y: np.ndarray, min_amplitude: float = 0.1) -> 
     p = int(np.flatnonzero(win)[np.nanargmax(y[win])])
     peak = y[p]
     out.update(peak_doy=float(doy[p]), peak_ndvi=float(peak))
+    # szczyt do dnia: wierzchołek paraboli przez 3 terminy wokół maksimum (terminy co 16 dni)
+    if 0 < p < len(y) - 1 and np.isfinite(y[p - 1]) and np.isfinite(y[p + 1]):
+        y0, y1, y2 = y[p - 1], y[p], y[p + 1]
+        denom = y0 - 2 * y1 + y2
+        if denom < 0:                                          # parabola „do góry nogami” = jest maksimum
+            step = doy[p + 1] - doy[p]
+            offset = 0.5 * step * (y0 - y2) / denom            # przesunięcie wierzchołka, w dniach
+            offset = float(np.clip(offset, -step / 2, step / 2))
+            out.update(peak_doy=float(doy[p] + offset),
+                       peak_ndvi=float(y1 - (y0 - y2) ** 2 / (8 * denom)))
 
     left = y[: p + 1]
     if np.isfinite(left).any():

@@ -43,6 +43,17 @@ Najważniejsze uwagi (szczegóły w notatnikach):
 **Dostępy — jedno konto:**
 - **Copernicus CDS** (pogoda, [instrukcja](https://cds.climate.copernicus.eu/how-to-api)): zaakceptować licencję ERA5-Land, plik `~/.cdsapirc` z tokenem (nie commitujemy), `pip install "cdsapi>=0.7.7"`.
 - Bez kont: Planetary Computer (NDVI, WorldCover), IMGW, GUS (opcjonalny klucz `X-ClientId` podnosi limity 5×), GUGiK.
+- **Sieć klastra blokuje magazyn plików Microsoftu** (`*.blob.core.windows.net`, pliki Planetary Computer). NDVI pobieramy więc z laptopa przez VPN i wysyłamy prosto na HDFS (`lib/ingest_modis_ndvi.py`, WebHDFS). Klucz CDS leży na masterze (`~/.cdsapirc`, prawa 600), ERA5-Land pobiera `lib/ingest_era5_land.py` (2 zamówienia na miesiąc — limit wielkości zamówienia w CDS).
+
+**Dane na HDFS** (pliki z replikacją 1 — da się je odtworzyć skryptami):
+
+| Ścieżka | Co | Skrypt |
+| --- | --- | --- |
+| `/rbd/raw/modis_ndvi_poland/<rok>/` | NDVI MODIS, wycinek Polski, 549 terminów 2001–2024 | `lib/ingest_modis_ndvi.py` |
+| `/rbd/raw/era5_land/<rok>/` | ERA5-Land godzinowo, 10 zmiennych, `_instant.nc` + `_accum.nc` na miesiąc | `lib/ingest_era5_land.py` |
+| `/rbd/ref/boundaries/`, `/rbd/ref/crops/` | granice powiatów i województw, mapy upraw EUCROPMAP 2018/2022 | `lib/boundaries.py`, `B1_B2/prepare_counties_crops.py` |
+| `/rbd/clean/ndvi_counties/` | NDVI pól per powiat i termin (Parquet) — wspólne dla B1, B2, G, H | `lib/ndvi_zonal_spark.py` |
+| `/rbd/clean/b1_*`, `/rbd/clean/b2_phenology/` | wyniki B1 i B2 (też w ClickHouse) | `B1_B2/b1_crop_condition.py`, `B1_B2/b2_phenology.py` |
 
 ## 4. Architektura
 
@@ -72,13 +83,26 @@ flowchart LR
 - D: godzina groźna = temperatura < progu (tabela w sekcji 2). Okno 72 h; alarm, gdy ≥ 50% punktów z oziminami w województwie ma ≥ 6 groźnych godzin (ostrzeżenie ≥ 30%).
 - S1 dla regionu i roku: uzupełnienie luk → wygładzenie (Savitzky–Golay) → start/koniec = 50% wysokości górki, szczyt = maksimum.
 - H: (1) nagły spadek NDVI poniżej wygładzonej krzywej z G; (2) sezon poniżej mediany z lat 2001–2017. Normy nie liczymy z lat 2018–2024, bo zawierają testowane susze.
-- **B1 + B2 — biuletyn stanu upraw (plan).** Co 16 dni w sezonie (IV–IX) i raz w roku (podsumowanie w październiku) powstaje automatyczny biuletyn PDF dla każdego powiatu ziemskiego, na wzór biuletynu JRC MARS: B1 pokazuje stan upraw na tle normy 2001–2017, B2 przebieg sezonu (start, szczyt, koniec) względem typowych dat, a model Bielik dopisuje komentarz analityka z możliwą przyczyną. Mapa upraw EUCROPMAP (JRC) daje strukturę upraw powiatu i osobne krzywe dla grup upraw (ozime i rzepak, jare zboża, kukurydza, okopowe, łąki) w latach, dla których mapa istnieje. Biuletyn składamy w LaTeX: 2 strony w dwóch kolumnach, jak krótki raport naukowy (podsumowanie roczne ok. 4 strony). Biuletyn trafia mailem do osób, które zapisały się na dany powiat. B1 i B2 liczymy osobno ze wspólnej krzywej NDVI, w osobnych DAG-ach Airflow, które startują same, gdy pojawią się ich dane wejściowe (Airflow Datasets). Komentarze Bielika i PDF-y powstają asynchronicznie przez kolejkę w Kafce, więc obliczenia nie czekają na model.
+- **B1 + B2 — biuletyn stanu upraw (plan).** Co 16 dni w sezonie (IV–IX) i raz w roku (podsumowanie w październiku) powstaje automatyczny biuletyn PDF dla każdego powiatu ziemskiego, na wzór biuletynu JRC MARS: B1 pokazuje stan upraw na tle normy, B2 przebieg sezonu (start, szczyt, koniec) względem typowych dat, a model Bielik dopisuje komentarz analityka z możliwą przyczyną. Mapa upraw EUCROPMAP (JRC) daje strukturę upraw powiatu i osobne krzywe dla grup upraw (ozime i rzepak, jare zboża, kukurydza, okopowe, łąki) w latach, dla których mapa istnieje. Biuletyn składamy w LaTeX: 2 strony w dwóch kolumnach, jak krótki raport naukowy (podsumowanie roczne ok. 4 strony). Biuletyn trafia mailem do osób, które zapisały się na dany powiat. B1 i B2 liczymy osobno ze wspólnej krzywej NDVI, w osobnych DAG-ach Airflow, które startują same, gdy pojawią się ich dane wejściowe (Airflow Datasets). Komentarze Bielika i PDF-y powstają asynchronicznie przez kolejkę w Kafce, więc obliczenia nie czekają na model. Norma: **15 poprzednich lat** bez lat skrajnych (do 2010 r. stała 2001–2017) — pola z czasem zielenieją, więc porównujemy z niedawną przeszłością. Statusy: „gorzej niż zwykle / typowo / lepiej niż zwykle” (B1) i „wcześniej niż zwykle / typowo / później niż zwykle” (B2). B1 i B2 łączy widok `b1b2_*` w ClickHouse, który odróżnia słabsze uprawy od przesuniętego sezonu (np. 2020: chłodna wiosna, rośliny spóźnione, nie słabsze). Kod: `B1_B2/`, podgląd: dashboardy Grafany „B1” i „B2”.
 
 ## 6. Narzędzia
 
 - **Rdzeń:** Docker Swarm, HDFS + Parquet, Kafka, Spark (batch + Structured Streaming), ClickHouse, Grafana.
 - **Dodatki:** Airflow, Kafka UI, Prometheus + cAdvisor, kontrola jakości danych (pandera), GitHub Actions.
-- **Jeśli starczy czasu:** MLflow (B2), opis alertów przez model AI.
+- **Jeśli starczy czasu:** MLflow (G), opis alertów przez model AI.
+
+**Stan klastra** (Docker Swarm: master 10.7.11.21 + worker1–4 10.7.11.22–25, dostęp przez VPN; konfiguracja w `infra/`, hasła w `~/rbd-build/<usługa>/.env` na masterze — nie w repo):
+
+| Usługa | Adres | Gdzie | Uwagi |
+| --- | --- | --- | --- |
+| HDFS 3.4 | http://10.7.11.21:9870, `hdfs://10.7.11.21:9000` | NameNode na masterze, 4 DataNode'y | nasze pliki: replikacja 1 |
+| Spark 4.0 | http://10.7.11.21:8080, `spark://10.7.11.21:7077` | master + 4 workery (24 rdzenie, 160 GB) | zadania: `infra/spark/submit.sh <skrypt.py>` |
+| ClickHouse 26.8 | http://10.7.11.21:8123/play (natywny port 9001) | master | baza `rbd`, użytkownik `rbd` |
+| Grafana 13 | http://10.7.11.21:3000 | master | dashboardy z `infra/grafana/dashboards/` |
+| Kafka 4.3 + Kafka UI | `10.7.11.22–24:9092`, panel http://10.7.11.21:8090 | worker1–3 | tematy ×3 kopie, bez auto-tworzenia tematów |
+| Airflow 3.3 | http://10.7.11.21:8091 | master | zadania jako kontenery `rbd-python` (DockerOperator) |
+
+Wspólny obraz `rbd-python:0.1` (Spark 4.0 + Python 3.10 + rasterio, geopandas, pyarrow, cdsapi, xarray) jest na każdej maszynie: `infra/rbd-python/Dockerfile`.
 
 ## 7. Jak sprawdzamy wyniki
 
