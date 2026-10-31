@@ -124,6 +124,13 @@ Grupa & Start & Szczyt & Koniec \\
 
 \section{Warunki pogodowe}
 \VAR{weather_text|tex}
+\BLOCK{if has_weather}
+
+\begin{center}
+  \includegraphics[width=\columnwidth]{fig_weather.pdf}
+\end{center}
+{\footnotesize\color{muted} Słupki: opad i parowanie (ET\textsubscript{0}, FAO-56) w terminach 16-dniowych; linia: bilans wodny z 60 dni (opad $-$ parowanie), przerywana — typowo; kropkowana pionowa — termin wydania. Źródło: ERA5-Land (Copernicus).}
+\BLOCK{endif}
 
 \section{Ocena i możliwe przyczyny}
 \VAR{assessment_text|tex}

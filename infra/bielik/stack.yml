@@ -1,0 +1,42 @@
+# Bielik (model językowy, Ollama) na 2 workerach — pisze komentarz analityka do biuletynu B1/B2.
+#
+# Po co 2 maszyny: model na CPU robi jeden komentarz naraz; dwie kopie = dwa biuletyny równolegle i odporność
+# na awarię jednej maszyny. Raporter (B1_B2/reporter) działa na tych samych maszynach i łączy się lokalnie.
+# Ollama nie ma hasła — słucha tylko na 127.0.0.1 (sieć „host”), więc z sieci jej nie widać.
+# Limit 4 rdzeni i 12 GB: reszta maszyny zostaje dla Sparka (6 rdzeni / 40 GB) i Kafki.
+#
+# Wdrożenie (na masterze):
+#   docker node update --label-add bielik=true Bigdata-wn212-02     # worker1
+#   docker node update --label-add bielik=true Bigdata-wn212-04     # worker3 (worker4 ma systemową Ollamę Michała — port zajęty)
+#   docker stack deploy -c stack.yml rbd-bielik
+# Model (raz na każdej maszynie, ~6,7 GB; zostaje w wolumenie):
+#   docker exec $(docker ps -q -f name=rbd-bielik_ollama) ollama pull hf.co/speakleash/Bielik-11B-v3.0-Instruct-GGUF:Q4_K_M
+
+services:
+  ollama:
+    image: ollama/ollama:0.34.1
+    environment:
+      OLLAMA_HOST: 127.0.0.1:11434
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [hostnet]
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.labels.bielik == true]
+      resources:
+        limits:
+          cpus: "4"
+          memory: 12G
+      restart_policy:
+        condition: any
+
+volumes:
+  ollama-models:
+
+networks:
+  hostnet:
+    external: true
+    name: host

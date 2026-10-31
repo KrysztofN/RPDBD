@@ -54,7 +54,9 @@ def tex(value) -> str:
         return "—"
     s = str(value)
     repl = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
-            "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}"}
+            "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
+            # znaki spoza kodowania LaTeX (pdflatex) — zamieniane na polecenia
+            "≥": r"$\ge$", "≤": r"$\le$", "−": r"$-$", "₀": r"\textsubscript{0}", "±": r"$\pm$"}
     return "".join(repl.get(ch, ch) for ch in s)
 
 
@@ -105,8 +107,109 @@ def load_data(county: str, year: int, period: int) -> dict:
     counties = gpd.read_file(io.BytesIO(hdfs.read_bytes(REF_BOUNDARIES)))
     map_year = 2018 if year <= 2020 else 2022
     structure = pd.read_parquet(io.BytesIO(hdfs.read_bytes(REF_STRUCTURE.format(map_year=map_year))))
+    try:                                   # pogoda: wszystkie lata powiatu (bieżący + lata do normy)
+        weather = ch.query_df(f"SELECT * FROM weather_periods WHERE region_id = '{county}' ORDER BY year, period")
+    except RuntimeError:
+        weather = pd.DataFrame()
     return dict(periods=periods, b2=b2, voiv_now=voiv_now, counties=counties, map_year=map_year,
-                structure=structure[structure["region_id"] == county])
+                structure=structure[structure["region_id"] == county], weather=weather)
+
+
+# --------------------------------------------------------------------------- pogoda
+SEASON_FIRST_PERIOD = 6                    # termin od ok. 7 kwietnia
+DROUGHT_KBW_60D = -150.0                   # próg suszy z README (uproszczenie IUNG): bilans wodny 60 dni < -150 mm
+
+
+def weather_summary(weather: pd.DataFrame, year: int, period: int, clip_k: float = 1.5) -> dict | None:
+    """
+    Pogoda powiatu w terminie wydania i od początku sezonu na tle normy z lat poprzednich (do 15 lat, bez lat
+    skrajnych — ta sama zasada co w B1). Zwraca liczby do tekstu, wykresu i reguł przyczyn; None = brak danych.
+    """
+    from B1_B2.norms import clipped_stats
+
+    if weather.empty or not ((weather["year"] == year) & (weather["period"] == period)).any():
+        return None
+    w = weather.set_index(["year", "period"]).sort_index()
+    ref = weather[(weather["year"] < year) & (weather["year"] >= year - 15)]
+    norm = (ref.groupby("period")[["precip_mm", "et0_mm", "kbw_mm", "kbw_60d_mm", "t_mean"]]
+            .agg(lambda v: clipped_stats(v, clip_k)["norm_mean"]))
+    cur = w.loc[(year, period)]
+    season = weather[(weather["year"] == year) & weather["period"].between(SEASON_FIRST_PERIOD, period)]
+    recent = weather[(weather["year"] == year) & weather["period"].between(period - 1, period)]
+    spring = weather[(weather["year"] == year) & weather["period"].between(SEASON_FIRST_PERIOD, min(period, 9))]
+    n_ref = ref["year"].nunique()
+    ref_season = norm.loc[norm.index.intersection(range(SEASON_FIRST_PERIOD, period + 1))]
+    return dict(
+        cur=cur, norm=norm, n_ref=n_ref, ref_years=(int(ref["year"].min()), int(ref["year"].max())) if n_ref else None,
+        year_rows=weather[weather["year"] == year].set_index("period"),
+        kbw_60d=float(cur["kbw_60d_mm"]),
+        kbw_60d_norm=float(norm.loc[period, "kbw_60d_mm"]) if period in norm.index else np.nan,
+        season_precip=float(season["precip_mm"].sum()), season_et0=float(season["et0_mm"].sum()),
+        season_precip_norm=float(ref_season["precip_mm"].sum()) if n_ref else np.nan,
+        hot_recent=int(recent["hot_days"].sum()), frost_spring=int(spring["frost_days"].sum()),
+        recent_precip=float(recent["precip_mm"].sum()),
+        recent_precip_norm=float(norm.loc[norm.index.intersection([period - 1, period]), "precip_mm"].sum()) if n_ref else np.nan,
+        spring_t=float(spring["t_mean"].mean()) if not spring.empty else np.nan,
+        spring_t_norm=float(norm.loc[norm.index.intersection(range(SEASON_FIRST_PERIOD, min(period, 9) + 1)), "t_mean"].mean())
+        if n_ref else np.nan,
+    )
+
+
+def weather_causes(ws: dict | None, b1_status: str, start_status: str | None, end_status: str | None,
+                   period: int) -> list[str]:
+    """Możliwe przyczyny z liczb pogodowych (reguły; lista uporządkowana od najsilniejszej)."""
+    if ws is None:
+        return []
+    causes = []
+    k, kn = ws["kbw_60d"], ws["kbw_60d_norm"]
+    if k <= DROUGHT_KBW_60D:
+        causes.append(f"susza: bilans wodny z 60 dni {num(k)} mm (próg suszy {num(DROUGHT_KBW_60D)} mm)")
+    elif k <= -100 or (np.isfinite(kn) and k <= kn - 50):
+        causes.append(f"niedobór wody: bilans wodny z 60 dni {num(k)} mm (typowo {num(kn)} mm)")
+    if ws["hot_recent"] >= 3:
+        causes.append(f"upał: {ws['hot_recent']} dni z temperaturą ≥ 30 °C w ostatnich ok. 32 dniach")
+    if ws["frost_spring"] >= 1 and period <= 12:
+        causes.append(f"przymrozki wiosną: {ws['frost_spring']} dni z temperaturą < 0 °C od początku kwietnia")
+    if np.isfinite(ws["recent_precip_norm"]) and ws["recent_precip"] >= 1.8 * ws["recent_precip_norm"] \
+            and ws["recent_precip"] >= 60:
+        causes.append(f"nadmiar wody: opad {num(ws['recent_precip'])} mm w ok. 32 dni (typowo {num(ws['recent_precip_norm'])} mm)")
+    if start_status == "później niż zwykle" and np.isfinite(ws["spring_t_norm"]) \
+            and ws["spring_t"] <= ws["spring_t_norm"] - 1:
+        causes.append(f"chłodna wiosna: średnio {num(ws['spring_t'], 1)} °C (typowo {num(ws['spring_t_norm'], 1)} °C)")
+    return causes
+
+
+def plot_weather(ws: dict, year: int, edition_start: date, out: Path) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    yr = ws["year_rows"]
+    x = yr.index.to_numpy().astype(int) * 16 + 1          # numer terminu z ClickHouse to UInt8 — bez astype przepełnienie
+    fig, ax = plt.subplots(figsize=(3.6, 2.5))
+    ax.bar(x - 3, yr["precip_mm"], width=6, color="#2C6FBB", label="opad")
+    ax.bar(x + 3, yr["et0_mm"], width=6, color="#E6862E", label="parowanie ET₀")
+    ax.set_ylabel("mm / 16 dni", fontsize=6)
+    ax2 = ax.twinx()
+    ax2.plot(x, yr["kbw_60d_mm"], color="#8B0000", lw=1.6, label="bilans wodny 60 dni")
+    if ws["n_ref"]:
+        nx = ws["norm"].index.to_numpy().astype(int) * 16 + 1
+        ax2.plot(nx, ws["norm"]["kbw_60d_mm"], color="#8B0000", lw=0.8, ls="--", alpha=0.6, label="bilans — typowo")
+    ax2.axhline(DROUGHT_KBW_60D, color="black", lw=0.6, ls=":")
+    ax2.text(5, DROUGHT_KBW_60D, " próg suszy", fontsize=5, va="bottom")
+    ax2.set_ylabel("bilans 60 dni [mm]", fontsize=6)
+    ax.axvline((edition_start - date(year, 1, 1)).days + 1, color="black", lw=0.8, ls=":")
+    ax.set_xticks([1, 60, 121, 182, 244, 305])
+    ax.set_xticklabels(["I", "III", "V", "VII", "IX", "XI"])
+    ax.set_xlim(-8, 372)
+    for a in (ax, ax2):
+        a.tick_params(labelsize=6)
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, fontsize=5, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, frameon=False)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(out)
+    plt.close(fig)
 
 
 # --------------------------------------------------------------------------- wykresy
@@ -260,16 +363,33 @@ def build_context(data: dict, county: str, year: int, period: int) -> dict:
                           f"Łąki i pastwiska: ok. {num(srow['grassland_km2'])} km².")
     else:
         structure_text = "Brak danych o strukturze upraw dla tego powiatu."
-    weather_text = ("Sekcja w przygotowaniu: dane pogodowe ERA5-Land (opad, parowanie, bilans wodny, temperatury) "
-                    "dla powiatów są właśnie pobierane i pojawią się w kolejnych wydaniach.")
-    if context:
-        assessment_text = (f"Odchylenie zieloności od normy w dużej mierze wyjaśnia przesunięcie sezonu: {context}. "
-                           "Ocena przyczyn pogodowych pojawi się po dodaniu danych ERA5-Land.")
-    elif status == "gorzej niż zwykle":
-        assessment_text = ("Uprawy są słabsze niż zwykle bez wyraźnego przesunięcia sezonu — to sygnał do obserwacji. "
-                           "Możliwe przyczyny (susza, przymrozek, nadmiar wody) oceni sekcja pogodowa po dodaniu danych ERA5-Land.")
+    ws = weather_summary(data.get("weather", pd.DataFrame()), year, period)
+    causes = weather_causes(ws, status, stages[0].get("status"), stages[2].get("status") if stages[2]["happened"] else None,
+                            period)
+    if ws is None:
+        weather_text = ("Brak danych pogodowych ERA5-Land dla tego roku — są jeszcze pobierane; "
+                        "sekcja pojawi się po ich przeliczeniu.")
     else:
-        assessment_text = "Brak sygnałów niepokojących w tym terminie."
+        c = ws["cur"]
+        ref = (f"lata {ws['ref_years'][0]}–{ws['ref_years'][1]} ({ws['n_ref']} lat)" if ws["n_ref"]
+               else "brak lat do porównania")
+        weather_text = (
+            f"W tym terminie spadło {num(c['precip_mm'])} mm deszczu przy parowaniu {num(c['et0_mm'])} mm "
+            f"(bilans {num(c['kbw_mm'])} mm). Bilans wodny z ostatnich 60 dni: {num(ws['kbw_60d'])} mm"
+            + (f" (typowo {num(ws['kbw_60d_norm'])} mm)" if np.isfinite(ws["kbw_60d_norm"]) else "")
+            + f"; próg suszy to {num(DROUGHT_KBW_60D)} mm. Od początku kwietnia: opad {num(ws['season_precip'])} mm"
+            + (f" (typowo {num(ws['season_precip_norm'])} mm)" if np.isfinite(ws["season_precip_norm"]) else "")
+            + f", parowanie {num(ws['season_et0'])} mm. Dni upalne (≥ 30 °C) w ostatnich ok. 32 dniach: {ws['hot_recent']}; "
+            f"dni z przymrozkiem od kwietnia: {ws['frost_spring']}. Norma pogodowa: {ref}.")
+    lead = (f"Uprawy {status} w tym terminie" + (f"; {context}" if context else "") + ".")
+    if causes:
+        assessment_text = lead + " Możliwe przyczyny wg danych pogodowych: " + "; ".join(causes) + "."
+    elif status == "gorzej niż zwykle":
+        assessment_text = lead + (" Dane pogodowe nie wskazują wyraźnej przyczyny (susza, upał, przymrozek, nadmiar wody) — "
+                                  "możliwe przyczyny lokalne (np. grad, szkodniki, choroby); warto sprawdzić w terenie."
+                                  if ws is not None else " Ocena przyczyn pogodowych pojawi się po przeliczeniu danych ERA5-Land.")
+    else:
+        assessment_text = lead + " Brak sygnałów niepokojących."
 
     norm_from, norm_to = int(cur["norm_from"]), int(cur["norm_to"])
     short = {"gorzej niż zwykle": "gorzej", "typowo": "typowo", "lepiej niż zwykle": "lepiej", "brak danych": "brak"}
@@ -290,7 +410,8 @@ def build_context(data: dict, county: str, year: int, period: int) -> dict:
         map_year=data["map_year"],
         ai_note="Komentarz analityka AI (model Bielik) zostanie dodany w kolejnej wersji biuletynu.",
         generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        _b2=b2, _edition_start=ed_start,
+        has_weather=ws is not None, causes=causes,
+        _b2=b2, _edition_start=ed_start, _weather=ws,
     )
 
 
@@ -317,18 +438,41 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def prepare_bulletin(county: str, year: int, period: int, out: Path) -> dict:
+    """Dane + wykresy + teksty z reguł (bez renderowania). Zwraca kontekst szablonu — raporter może podmienić teksty."""
+    out.mkdir(parents=True, exist_ok=True)
+    data = load_data(county, year, period)
+    ctx = build_context(data, county, year, period)
+    ws, ed_start = ctx.pop("_weather"), ctx.pop("_edition_start")
+    if ws is not None:
+        plot_weather(ws, year, ed_start, out / "fig_weather.pdf")
+    plot_curve(data["periods"], ctx.pop("_b2"), ed_start, out / "fig_curve.pdf")
+    plot_map(data["counties"], data["voiv_now"], county, out / "fig_map.pdf")
+    if not data["structure"].empty:
+        plot_structure(data["structure"], out / "fig_structure.pdf")
+    ctx["_weather_summary"] = ws
+    return ctx
+
+
+def compile_pdf(out: Path) -> Path:
+    """latexmk -> bulletin.pdf (w obrazie z TeX Live: rbd-latex albo rbd-reporter)."""
+    import subprocess
+
+    r = subprocess.run(["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", "bulletin.tex"],
+                       cwd=out, capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        errors = [line for line in r.stdout.splitlines() if line.startswith("!")][:5]
+        raise RuntimeError(f"LaTeX: {errors or r.stdout[-500:]}")
+    return out / "bulletin.pdf"
+
+
 def main() -> None:
     args = parse_args()
     setup_logging(args.verbose)
     out = args.out_dir / f"{args.county}_{args.year}_p{args.period:02d}"
-    out.mkdir(parents=True, exist_ok=True)
     with Timer(log, f"biuletyn {args.county} {args.year} termin {args.period}"):
-        data = load_data(args.county, args.year, args.period)
-        ctx = build_context(data, args.county, args.year, args.period)
-        plot_curve(data["periods"], ctx.pop("_b2"), ctx.pop("_edition_start"), out / "fig_curve.pdf")
-        plot_map(data["counties"], data["voiv_now"], args.county, out / "fig_map.pdf")
-        if not data["structure"].empty:
-            plot_structure(data["structure"], out / "fig_structure.pdf")
+        ctx = prepare_bulletin(args.county, args.year, args.period, out)
+        ctx.pop("_weather_summary")
         render(ctx, out / "bulletin.tex")
     log.info("%s: %s | %s | %s -> %s", ctx["county_name"], ctx["period_label"], ctx["pct_of_norm"],
              ctx["status_short"], out / "bulletin.tex")
