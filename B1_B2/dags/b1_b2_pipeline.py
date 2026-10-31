@@ -53,7 +53,7 @@ def spark_task(task_id: str, script: str, args: str = "", **kw) -> DockerOperato
     cmd = (f"cd /app && python3 -m zipfile -c /tmp/lib.zip lib B1_B2 >/dev/null && "
            f"exec /opt/spark/bin/spark-submit --master spark://{MASTER_IP}:7077 "
            f"--conf spark.driver.host={MASTER_IP} --conf spark.executorEnv.HADOOP_USER_NAME=hadoop "
-           f"--conf spark.hadoop.dfs.replication=1 --conf spark.executor.memory=8g --conf spark.driver.memory=4g "
+           f"--conf spark.hadoop.dfs.replication=2 --conf spark.executor.memory=8g --conf spark.driver.memory=4g "
            f"--conf spark.driver.extraJavaOptions=-Dlog4j2.configurationFile=/app/infra/spark/log4j2.properties "
            f"--py-files /tmp/lib.zip {script} {args}")
     return DockerOperator(task_id=task_id, image="rbd-python:0.1", entrypoint=["bash", "-c"], command=[cmd],

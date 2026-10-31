@@ -4,7 +4,7 @@ Bot Telegram biuletynów B1/B2: zapisy na biuletyny i wysyłka PDF do subskryben
 Co robi (pętla, usługa Swarma na masterze):
   1. odbiera polecenia od ludzi (Telegram getUpdates):
        /start            — opis i lista poleceń
-       /mapa, /ndvi, /kbw, /wykres, /woda, /porownaj, /kody — mapy i wykresy na żądanie (bot_charts.py)
+       /mapa, /ndvi, /kbw, /uprawy, /wykres, /woda, /porownaj, /kody — mapy i wykresy na żądanie (bot_charts.py)
        /powiat 3011      — subskrypcja powiatu (kod TERYT albo nazwa, np. /powiat poznański)
        /woj 30           — subskrypcja całego województwa (kod albo nazwa, np. /woj wielkopolskie)
        /wszystko         — wszystkie powiaty
@@ -39,6 +39,7 @@ import os
 import re
 import time
 from datetime import date, datetime
+from html import escape
 from pathlib import Path
 
 import requests
@@ -62,25 +63,65 @@ DDL = [
     ) ENGINE = MergeTree ORDER BY (sent, request_id)""",
 ]
 
-HELP = (
-    "Biuletyn stanu upraw RBD — co 16 dni (IV–IX) PDF dla powiatu: stan upraw względem normy z 15 lat "
-    "(NDVI, MODIS), przebieg sezonu, pogoda (ERA5-Land) i komentarz modelu Bielik.\n\n"
-    "Kody: /kody — województwa, /kody 30 albo /kody wielkopolskie — powiaty województwa.\n"
-    "Powiat podajesz kodem (3011) albo nazwą (poznański).\n\n"
-    "Wykresy (rok opcjonalny, domyślnie ostatni z danymi):\n"
-    "/mapa 2018 15.07 — mapa Polski: stan upraw w powiatach w danym dniu\n"
-    "/ndvi 2018 15.07 — NDVI z satelity (piksele 250 m) dla Polski; /ndvi 3011 2018 15.07 — dla powiatu\n"
-    "/kbw 2018 15.07 — bilans wody z 60 dni (susza) dla Polski; /kbw 3011 2018 15.07 — dla powiatu\n"
-    "/wykres 3011 2018 — krzywa NDVI powiatu na tle normy\n"
-    "/woda 3011 2018 — opad, parowanie i bilans wody (susza)\n"
-    "/porownaj 3011 1206 2018 — dwa powiaty: NDVI i bilans wody\n\n"
-    "Biuletyny PDF:\n"
-    "/powiat 3011 — subskrypcja powiatu, /woj 30 — całego województwa, /wszystko — całej Polski\n"
-    "/moje — moje subskrypcje, /ostatni — przyślij ostatni gotowy biuletyn, /stop — wypisz mnie")
+# Format poleceń: kursywa = co wpisać, [nawias] = można pominąć (nawiasów się nie wpisuje)
+USAGE = {
+    "/mapa": ("/mapa <i>[rok] [dzień]</i>", "/mapa 2018 15.07"),
+    "/ndvi": ("/ndvi <i>[powiat] [rok] [dzień]</i>", "/ndvi 3011 2018 15.07"),
+    "/kbw": ("/kbw <i>[powiat] [rok] [dzień]</i>", "/kbw 3011 2018 15.07"),
+    "/uprawy": ("/uprawy <i>[powiat] [rok]</i>", "/uprawy 3011 2018"),
+    "/wykres": ("/wykres <i>powiat [rok]</i>", "/wykres 3011 2018"),
+    "/woda": ("/woda <i>powiat [rok]</i>", "/woda 3011 2018"),
+    "/porownaj": ("/porownaj <i>powiat powiat [rok]</i>", "/porownaj 3011 1206 2018"),
+    "/kody": ("/kody <i>[województwo]</i>", "/kody 30"),
+    "/powiat": ("/powiat <i>powiat</i>", "/powiat 3011"),
+    "/woj": ("/woj <i>województwo</i>", "/woj 30"),
+}
+
+
+def usage(cmd: str) -> str:
+    form, example = USAGE[cmd]
+    return f"{form}\n    np. <code>{example}</code>"
+
+
+HELP = (                                       # HTML Telegrama: <b> pogrubienie, <i> kursywa, <code> do skopiowania
+    "<b>Biuletyn stanu upraw RBD</b>\n"
+    "Biuletyny PDF o stanie upraw w powiatach oraz mapy i wykresy na żądanie.\n\n"
+    "<b>Jak wpisywać polecenia</b>\n"
+    "Najpierw polecenie, potem spacja i dane, zawsze w tej kolejności:\n"
+    "<code>/polecenie powiat rok dzień</code>\n\n"
+    "• <b>powiat</b> — kod TERYT (4 cyfry), np. <code>3011</code>, albo nazwa, np. <code>kościański</code>\n"
+    "• <b>województwo</b> — kod (2 cyfry), np. <code>30</code>, albo nazwa, np. <code>wielkopolskie</code>\n"
+    "• <b>rok</b> — 4 cyfry, np. <code>2018</code>\n"
+    "• <b>dzień</b> — dzień.miesiąc, np. <code>15.07</code>\n"
+    "• dane w <i>[nawiasie]</i> można pominąć (nawiasów nie wpisujemy); bez powiatu = cała Polska, "
+    "bez roku = ostatni rok, bez dnia = koniec czerwca\n"
+    "• kody powiatów i województw: /kody\n\n"
+    "<b>Mapy</b> — cała Polska albo jeden powiat\n"
+    + "\n".join(f"• {usage(c)}\n    {d}" for c, d in (
+        ("/mapa", "ocena stanu upraw w każdym powiecie"),
+        ("/ndvi", "zieloność roślin z satelity"),
+        ("/kbw", "bilans wody z 60 dni (susza)"),
+        ("/uprawy", "jakie uprawy gdzie rosną"))) + "\n\n"
+    "<b>Wykresy powiatu</b>\n"
+    + "\n".join(f"• {usage(c)}\n    {d}" for c, d in (
+        ("/wykres", "zieloność pól przez cały rok na tle typowych lat"),
+        ("/woda", "opad, parowanie i bilans wody przez cały rok"),
+        ("/porownaj", "dwa powiaty na jednym wykresie"))) + "\n\n"
+    "<b>Kody</b>\n"
+    "• /kody — kody województw\n"
+    f"• {usage('/kody')}\n    kody powiatów województwa\n\n"
+    "<b>Biuletyny PDF</b> — przychodzą same co 16 dni (IV–IX)\n"
+    f"• {usage('/powiat')}\n    zapis na biuletyny powiatu\n"
+    f"• {usage('/woj')}\n    zapis na biuletyny wszystkich powiatów województwa\n"
+    "• /wszystko — zapis na biuletyny całej Polski\n"
+    "• /moje — moje zapisy\n"
+    "• /ostatni — przyślij ostatni gotowy biuletyn\n"
+    "• /stop — wypisz mnie ze wszystkiego")
 
 COMMANDS = [("kody", "lista kodów województw i powiatów"), ("mapa", "mapa Polski: stan upraw, np. /mapa 2018 15.07"),
             ("ndvi", "mapa NDVI 250 m: Polska lub powiat, np. /ndvi 3011 2018 15.07"),
             ("kbw", "mapa bilansu wody (susza): Polska lub powiat, np. /kbw 2018 15.07"),
+            ("uprawy", "mapa upraw (2018, 2022): Polska lub powiat, np. /uprawy 3011 2018"),
             ("wykres", "krzywa NDVI powiatu, np. /wykres 3011 2018"), ("woda", "bilans wody powiatu, np. /woda 3011 2018"),
             ("porownaj", "dwa powiaty, np. /porownaj 3011 1206 2018"), ("powiat", "subskrypcja biuletynów powiatu"),
             ("woj", "subskrypcja biuletynów województwa"), ("wszystko", "subskrypcja całej Polski"),
@@ -96,6 +137,11 @@ def scope_matches(scope: str, region_id: str) -> bool:
         return True
     kind, _, code = scope.partition(":")
     return (kind == "voiv" and region_id[:2] == code) or (kind == "county" and region_id == code)
+
+
+def years_text(years: list[int]) -> str:
+    """[2010, 2011, 2012] -> '2010–2012'; z dziurami -> lista po przecinku."""
+    return f"{years[0]}–{years[-1]}" if years[-1] - years[0] + 1 == len(years) else ", ".join(map(str, years))
 
 
 def sql_str(text: str) -> str:
@@ -125,14 +171,14 @@ class Telegram:
         return body["result"]
 
     def send_text(self, chat_id: int, text: str) -> None:
-        self.call("sendMessage", chat_id=chat_id, text=text)
+        self.call("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML", disable_web_page_preview=True)
 
     def send_photo(self, chat_id: int, png: bytes, caption: str) -> None:
-        self.call("sendPhoto", http_timeout=60, chat_id=chat_id, caption=caption[:1024],
+        self.call("sendPhoto", http_timeout=60, chat_id=chat_id, caption=caption[:1024], parse_mode="HTML",
                   files={"photo": ("wykres.png", png, "image/png")})
 
     def send_pdf(self, chat_id: int, pdf: bytes, filename: str, caption: str) -> None:
-        self.call("sendDocument", http_timeout=120, chat_id=chat_id, caption=caption[:1024],
+        self.call("sendDocument", http_timeout=120, chat_id=chat_id, caption=caption[:1024], parse_mode="HTML",
                   files={"document": (filename, pdf, "application/pdf")})
 
 
@@ -144,6 +190,13 @@ class Bot:
         self.years = [int(y) for y in ch.query_df("SELECT DISTINCT year FROM rbd.b1_periods ORDER BY year")["year"]]
         self._geo = None                                         # granice powiatów do mapy (wczytane przy 1. /mapa)
         self._geo_cache = {}                                     # granice województw (map Polski)
+        self.cmd = ""                                            # bieżące polecenie (podpowiedź formatu)
+
+    def warn(self, chat_id: int, text: str) -> None:
+        """Komunikat o błędzie / braku danych (escapowany — może zawierać tekst od użytkownika) + format polecenia."""
+        hint = f"\n\n<b>Format:</b>\n{usage(self.cmd)}\n\nKody powiatów: /kody · pomoc: /start" \
+            if self.cmd in USAGE else ""
+        self.tg.send_text(chat_id, f"<b>Uwaga:</b> {escape(text)}{hint}")
 
     # ---------- wykresy ----------
 
@@ -188,36 +241,36 @@ class Bot:
         if tokens and re.fullmatch(r"\d{4}", tokens[-1]) and (len(tokens) > 1 or 1990 <= int(tokens[-1]) <= 2100):
             year = int(tokens.pop())
         if year not in years:
-            have = f"{years[0]}–{years[-1]}" if years[-1] - years[0] + 1 == len(years) else ", ".join(map(str, years))
-            return None, None, None, f"Brak danych dla roku {year}. Dostępne: {have}."
+            return None, None, None, f"Brak danych dla roku {year}. Dostępne: {years_text(years)}."
         place = None
         if tokens:
             scope, err = self.find_scope("county", " ".join(tokens))
             if scope is None:
-                return None, None, None, f"„{' '.join(tokens)}”: {err}"
+                return None, None, None, f"„{' '.join(tokens)}” — {err[0].lower()}{err[1:]}"
             code = scope.split(":")[1]
             place = (code, self.counties.loc[self.counties["region_id"] == code, "county_name"].iloc[0])
         try:
             period = bc.period_of(date(year, day_month[1], day_month[0])) if day_month else MAP_DEFAULT_PERIOD
         except ValueError:
-            return None, None, None, "Zła data. Przykład: 15.07"
+            return None, None, None, "Zła data — wpisz dzień.miesiąc, np. 15.07."
         return place, year, period, ""
 
     def cmd_raster_map(self, chat_id: int, kind: str, arg: str) -> None:
-        """/ndvi i /kbw: mapa Polski albo powiatu dla roku i terminu."""
+        """/ndvi, /kbw, /uprawy (kind = nazwa polecenia): mapa Polski albo powiatu dla roku (i terminu)."""
         from B1_B2.reporter import bot_charts as bc
-        years = self.years if kind == "ndvi" else bc.kbw_years(self.ch)
+        years = bc.kbw_years(self.ch) if kind == "kbw" else self.years
         place, year, period, err = self.map_args(arg, years)
         if err:
-            self.tg.send_text(chat_id, err)
+            self.warn(chat_id, err)
             return
-        draw = bc.ndvi_map_png if kind == "ndvi" else bc.kbw_map_png
+        draw = {"ndvi": bc.ndvi_map_png, "kbw": bc.kbw_map_png, "uprawy": bc.crop_map_png}[kind]
         png, text = draw(self.ch, self.geo(full=place is not None), year, period, place,
                          voiv=self.voiv() if place is None else None)
         if png is None:
-            self.tg.send_text(chat_id, text)
+            self.warn(chat_id, text)
         else:
-            self.tg.send_photo(chat_id, png, text + f"\nInaczej: /{kind} 3011 2018 15.07 (powiat, rok, dzień)")
+            other = "Inny powiat, rok:" if kind == "uprawy" else "Inny powiat, rok, dzień:"
+            self.tg.send_photo(chat_id, png, text + f"\n\n<b>{other}</b>\n{usage('/' + kind)}")
 
     def parse_year(self, tokens: list[str], keep: int, default: int | None = None) -> tuple[int | None, str]:
         """Ostatni token = rok, jeśli to 4 cyfry i zostaje `keep` innych tokenów (kod powiatu też ma 4 cyfry).
@@ -226,14 +279,14 @@ class Bot:
         if len(tokens) > keep and re.fullmatch(r"\d{4}", tokens[-1]):
             year = int(tokens.pop())
         if year not in self.years:
-            return None, f"Brak danych dla roku {year}. Dostępne: {self.years[0]}–{self.years[-1]}."
+            return None, f"Brak danych dla roku {year}. Dostępne: {years_text(self.years)}."
         return year, ""
 
     def county_args(self, arg: str, n: int, default_year: int | None = None):
         """'3011 1206 2018' -> ([(kod, nazwa), ...], rok, błąd); najpierw n powiatów, rok na końcu."""
         tokens = arg.split()
         if len(tokens) < n:
-            return [], None, "Podaj " + ("powiat" if n == 1 else f"{n} powiaty") + " (kod albo nazwę). Kody: /kody"
+            return [], None, "Brakuje powiatu." if n == 1 else f"Potrzebne są {n} powiaty."
         year, err = self.parse_year(tokens, n, default_year)
         if err:
             return [], None, err
@@ -242,7 +295,7 @@ class Bot:
         for t in names:
             scope, err = self.find_scope("county", t)
             if scope is None:
-                return [], None, f"„{t}”: {err}"
+                return [], None, f"„{t}” — {err[0].lower()}{err[1:]}"
             code = scope.split(":")[1]
             places.append((code, self.counties.loc[self.counties["region_id"] == code, "county_name"].iloc[0]))
         return places, year, ""
@@ -251,10 +304,10 @@ class Bot:
         from B1_B2.reporter import bot_charts as bc
         _, year, p, err = self.map_args(arg, self.years)
         if err:
-            self.tg.send_text(chat_id, err)
+            self.warn(chat_id, err)
             return
         png, text = bc.map_png(self.ch, self.geo(), year, p)
-        self.tg.send_photo(chat_id, png, text + "\nInny dzień: /mapa 2018 15.07")
+        self.tg.send_photo(chat_id, png, text + f"\n\n<b>Inny rok, dzień:</b>\n{usage('/mapa')}")
 
     def cmd_chart(self, chat_id: int, kind: str, arg: str, n: int) -> None:
         from B1_B2.reporter import bot_charts as bc
@@ -262,7 +315,7 @@ class Bot:
         default = wy[-1] if kind == "water" and wy else None   # /woda bez roku: ostatni rok z pogodą
         places, year, err = self.county_args(arg, n, default)
         if err:
-            self.tg.send_text(chat_id, err)
+            self.warn(chat_id, err)
             return
         charts = []
         if kind in ("ndvi", "both"):
@@ -276,9 +329,9 @@ class Bot:
                 charts.append(res)
         for res in charts:
             if res is None:
-                self.tg.send_text(chat_id, f"Brak danych NDVI dla {year}.")
+                self.warn(chat_id, f"Brak danych NDVI dla {year}.")
             elif res[0] is None:
-                self.tg.send_text(chat_id, res[1])
+                self.warn(chat_id, res[1])
             else:
                 self.tg.send_photo(chat_id, *res)
 
@@ -286,18 +339,22 @@ class Bot:
         c = self.counties
         if not arg.strip():
             v = c.drop_duplicates("voiv_id")
-            text = "Województwa (kod — nazwa):\n" + "\n".join(f"{i} — {n}" for i, n in zip(v["voiv_id"], v["voiv_name"]))
-            self.tg.send_text(chat_id, text + "\n\nPowiaty województwa: /kody 30 albo /kody wielkopolskie")
+            text = ("<b>Województwa</b> (kod — nazwa)\n\n"
+                    + "\n".join(f"• <code>{i}</code> — {escape(n)}" for i, n in zip(v["voiv_id"], v["voiv_name"]))
+                    + "\n\n<i>Powiaty województwa: /kody 30 albo /kody wielkopolskie</i>")
+            self.tg.send_text(chat_id, text)
             return
         scope, err = self.find_scope("voiv", arg)
         if scope is None:
-            self.tg.send_text(chat_id, err + " Lista: /kody")
+            self.warn(chat_id, err + " Lista województw: /kody")
             return
         code = scope.split(":")[1]
         rows = c[c["voiv_id"] == code]
-        text = (f"Powiaty — {rows['voiv_name'].iloc[0]} (kod — nazwa):\n"
-                + "\n".join(f"{i} — {n}" for i, n in zip(rows["region_id"], rows["county_name"]))
-                + "\n\nMiasta na prawach powiatu pomijamy (prawie bez upraw).")
+        text = (f"<b>Powiaty — {escape(rows['voiv_name'].iloc[0])}</b> (kod — nazwa)\n\n"
+                + "\n".join(f"• <code>{i}</code> — {escape(n.removeprefix('powiat '))}"
+                            for i, n in zip(rows["region_id"], rows["county_name"]))
+                + "\n\n<i>Miasta na prawach powiatu pomijamy (prawie bez upraw). "
+                  "Użycie kodu, np. /wykres 3011 albo /ndvi 3011 2018 15.07</i>")
         self.tg.send_text(chat_id, text)
 
     # ---------- subskrypcje ----------
@@ -320,11 +377,13 @@ class Bot:
             names = c.loc[c["voiv_id"] == code, "voiv_name"]
             return f"województwo {names.iloc[0]} ({code})" if len(names) else scope
         names = c.loc[c["region_id"] == code, "county_name"]
-        return f"powiat {names.iloc[0]} ({code})" if len(names) else scope
+        return f"{names.iloc[0]} ({code})" if len(names) else scope
 
     def find_scope(self, kind: str, arg: str) -> tuple[str | None, str]:
         """Kod albo nazwa -> zakres; przy kilku pasujących nazwach zwraca listę do wyboru."""
         arg = arg.strip().lower()
+        if not arg:
+            return None, "Brakuje " + ("powiatu." if kind == "county" else "województwa.")
         c = self.counties
         if kind == "county":
             id_col, name_col = "region_id", "county_name"
@@ -341,7 +400,7 @@ class Bot:
         if len(hit) > 1:
             opts = ", ".join(f"{n} ({i})" for i, n in zip(hit[id_col].head(10), hit[name_col].head(10)))
             return None, f"Pasuje kilka: {opts}. Podaj kod."
-        return None, "Nie znam takiego. Podaj kod TERYT (np. 3011) albo nazwę."
+        return None, "Nie znam takiego miejsca — wpisz kod albo nazwę."
 
     # ---------- polecenia ----------
 
@@ -351,6 +410,7 @@ class Bot:
             or msg["chat"].get("title", "")
         cmd, _, arg = (msg.get("text") or "").strip().partition(" ")
         cmd = cmd.split("@")[0].lower()
+        self.cmd = cmd                                           # do podpowiedzi formatu w komunikatach błędów
         log.info("polecenie %s od czatu %s", cmd, chat_id)
         if cmd in ("/start", "/pomoc", "/help"):
             self.tg.send_text(chat_id, HELP)
@@ -362,6 +422,8 @@ class Bot:
             self.cmd_raster_map(chat_id, "ndvi", arg)
         elif cmd == "/kbw":
             self.cmd_raster_map(chat_id, "kbw", arg)
+        elif cmd == "/uprawy":
+            self.cmd_raster_map(chat_id, "uprawy", arg)
         elif cmd == "/wykres":
             self.cmd_chart(chat_id, "ndvi", arg, 1)
         elif cmd == "/woda":
@@ -374,36 +436,45 @@ class Bot:
             else:
                 scope, err = self.find_scope("county" if cmd == "/powiat" else "voiv", arg)
             if scope is None:
-                self.tg.send_text(chat_id, err)
+                self.warn(chat_id, err)
                 return
             self.set_scope(chat_id, name, scope, 1)
-            self.tg.send_text(chat_id, f"Zapisano: {self.scope_label(scope)}. Nowe biuletyny przyjdą tutaj. "
-                                       "/ostatni — przyślij ostatni gotowy.")
+            self.tg.send_text(chat_id, "<b>Zapisano subskrypcję</b>\n\n"
+                                       f"• Zakres: {escape(self.scope_label(scope))}\n"
+                                       "• Nowe biuletyny PDF przyjdą tutaj automatycznie, co 16 dni (IV–IX)\n\n"
+                                       "<i>Ostatni gotowy biuletyn: /ostatni · wszystkie subskrypcje: /moje</i>")
         elif cmd == "/moje":
             subs = self.subscriptions(chat_id)
-            text = "\n".join(self.scope_label(s) for s in subs["scope"]) if len(subs) else "Brak subskrypcji."
+            if len(subs):
+                text = ("<b>Twoje subskrypcje</b>\n\n"
+                        + "\n".join(f"• {escape(self.scope_label(s))}" for s in subs["scope"])
+                        + "\n\n<i>Wypisanie ze wszystkich: /stop</i>")
+            else:
+                text = ("<b>Nie masz subskrypcji</b>\n\n• /powiat 3011 — powiat\n• /woj 30 — województwo\n"
+                        "• /wszystko — cała Polska")
             self.tg.send_text(chat_id, text)
         elif cmd == "/stop":
             subs = self.subscriptions(chat_id)
             for s in subs["scope"]:
                 self.set_scope(chat_id, name, s, 0)
-            self.tg.send_text(chat_id, "Wypisano. Nie dostaniesz więcej biuletynów. /start — zapis ponownie.")
+            self.tg.send_text(chat_id, "<b>Wypisano</b>\n\n• Nie dostaniesz więcej biuletynów\n\n"
+                                       "<i>Zapis ponownie: /powiat, /woj albo /wszystko</i>")
         elif cmd == "/ostatni":
             self.send_latest(chat_id)
         else:
-            self.tg.send_text(chat_id, "Nie znam tego polecenia.\n\n" + HELP)
+            self.tg.send_text(chat_id, "Nie znam tego polecenia. Lista poleceń:\n\n" + HELP)
 
     def send_latest(self, chat_id: int) -> None:
         scopes = list(self.subscriptions(chat_id)["scope"])
         if not scopes:
-            self.tg.send_text(chat_id, "Najpierw zapisz się: /powiat, /woj albo /wszystko.")
+            self.warn(chat_id, "Najpierw zapisz się: /powiat 3011, /woj 30 albo /wszystko.")
             return
         df = self.ch.query_df("SELECT * FROM rbd.bulletins WHERE status = 'ok' ORDER BY created DESC LIMIT 500")
         for row in df.to_dict("records"):
             if any(scope_matches(s, row["region_id"]) for s in scopes):
                 self.send_bulletin(row, only_chat=chat_id)
                 return
-        self.tg.send_text(chat_id, "Nie ma jeszcze gotowego biuletynu dla Twoich subskrypcji.")
+        self.warn(chat_id, "Nie ma jeszcze gotowego biuletynu dla Twoich subskrypcji.")
 
     # ---------- biuletyny ----------
 
@@ -427,8 +498,12 @@ class Bot:
             return 0
         pdf = WebHDFS().read_bytes(b["pdf_path"])
         cause = b.get("cause") or ""
-        caption = (f"Biuletyn stanu upraw: powiat {b['county_name']}, {b['period_label']} {b['year']}."
-                   + (f"\nNajbardziej prawdopodobna przyczyna odchyleń (Bielik): {cause}." if cause not in ("", "reguły") else ""))
+        caption = ("<b>Biuletyn stanu upraw</b>\n\n"
+                   f"• Powiat: {escape(str(b['county_name']))}\n"
+                   f"• Termin: {escape(str(b['period_label']))} {b['year']}"
+                   + (f"\n• Najbardziej prawdopodobna przyczyna odchyleń (Bielik): {escape(cause)}"
+                      if cause not in ("", "reguły") else "")
+                   + "\n\n<i>W PDF: stan upraw względem normy, przebieg sezonu, pogoda i komentarz.</i>")
         fname = f"biuletyn_{rid}_{b['year']}_p{int(b['period']):02d}.pdf"
         rows, sent = [], 0
         for chat in chats:

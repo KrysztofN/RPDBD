@@ -38,7 +38,7 @@ from pathlib import Path
 import pandas as pd
 
 from lib.log import Progress, Timer, get_logger, setup_logging
-from lib.webhdfs import DEFAULT_URL, DEFAULT_USER, WebHDFS
+from lib.webhdfs import DEFAULT_URL, DEFAULT_USER, REPLICATION, WebHDFS
 
 log = get_logger(Path(__file__).stem)
 
@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hdfs-dir", default=HDFS_DIR)
     p.add_argument("--webhdfs-url", default=DEFAULT_URL)
     p.add_argument("--hdfs-user", default=DEFAULT_USER)
-    p.add_argument("--replication", type=int, default=1)
+    p.add_argument("--replication", type=int, default=REPLICATION)
     p.add_argument("--workers", type=int, default=2,
                    help="ile zamówień naraz w kolejce CDS (limit na użytkownika; klucz jest wspólny dla zespołu)")
     p.add_argument("--cache-dir", default="data/era5_cache",

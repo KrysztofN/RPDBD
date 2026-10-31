@@ -70,7 +70,7 @@ def make_one(req: dict) -> dict:
         target = f"{HDFS_DIR}/{year}/{county}_{year}_p{period:02d}.pdf"
         hdfs = WebHDFS()
         hdfs.mkdirs(f"{HDFS_DIR}/{year}")
-        hdfs.put(pdf, target, replication=1, overwrite=True)
+        hdfs.put(pdf, target, overwrite=True)
     return dict(request_id=req.get("request_id", ""), region_id=county, county_name=ctx["county_name"], year=year,
                 period=period, period_label=ctx["period_label"], status="ok", ai_used=int(answer is not None),
                 ai_result=ai_result, cause=(answer or {}).get("przyczyna", "reguły"), pdf_path=target,

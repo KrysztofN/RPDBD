@@ -6,7 +6,7 @@
 #   spark.driver.host=<IP>         executory na workerach łączą się z driverem po IP (workery nie znają
 #                                  nazwy Bigdata-wn212-01 — bez tego executory padają w kółko)
 #   HADOOP_USER_NAME=hadoop        katalogi /rbd na HDFS należą do użytkownika hadoop (proste uwierzytelnianie)
-#   spark.hadoop.dfs.replication=1 pliki zapisywane przez Sparka mają 1 kopię (decyzja zespołu, dane odtwarzalne)
+#   spark.hadoop.dfs.replication=2 pliki zapisywane przez Sparka mają 2 kopie (awaria 1 maszyny nie gubi danych)
 #   spark.executor.memory=8g       domyślne 1 GB to za mało dla zdjęć NDVI (ok. 20 MB każde + maski)
 #   --py-files lib.zip             kod z lib/ i B1_B2/ dostępny także na workerach
 #   log4j2.properties              logi samego Sparka tylko od WARN (nasze INFO z lib/log.py zostają)
@@ -31,7 +31,7 @@ exec docker run --rm --network host -v "$CODE_DIR":/app -e HADOOP_USER_NAME=hado
     --master "spark://'"$MASTER_IP"':7077" \
     --conf "spark.driver.host='"$MASTER_IP"'" \
     --conf spark.executorEnv.HADOOP_USER_NAME=hadoop \
-    --conf spark.hadoop.dfs.replication=1 \
+    --conf spark.hadoop.dfs.replication=2 \
     --conf "spark.executor.memory='"$EXEC_MEM"'" \
     --conf spark.driver.memory=4g \
     --conf "spark.driver.extraJavaOptions=-Dlog4j2.configurationFile=/app/infra/spark/log4j2.properties" \

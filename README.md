@@ -2,7 +2,7 @@
 
 *Rozproszone Przetwarzanie Danych w Big Data · plan pracy: [ROADMAP.md](ROADMAP.md)*
 
-**Stan (31.10.2026):** klaster i wszystkie narzędzia działają (sekcja 6); procesy **B1 i B2 gotowe** — od NDVI w HDFS do biuletynu PDF z komentarzem modelu Bielik, rozsyłanego botem Telegram i sprawdzonego na plonach GUS (sekcje 5 i 7). Pogoda ERA5-Land jeszcze się pobiera (sekcja 3).
+**Stan (31.10.2026):** klaster i wszystkie narzędzia działają (sekcja 6); procesy **B1 i B2 gotowe** — od NDVI w HDFS do biuletynu PDF z komentarzem modelu Bielik, rozsyłanego botem Telegram (subskrypcje, mapy i wykresy na żądanie) i sprawdzonego na plonach GUS (sekcje 5 i 7). Pogoda ERA5-Land jeszcze się pobiera — po komplecie przeliczamy pogodę (DAG `rbd_weather_counties`) i biuletyny.
 
 ## 1. Projekt
 
@@ -29,9 +29,9 @@ Testujemy na: zimie **2011/12** (do −30 °C bez śniegu, duże straty ozimin) 
 
 | Zbiór | Źródło | Zakres | Procesy | Notatnik |
 | --- | --- | --- | --- | --- |
-| Pogoda godzinowa | ERA5-Land (Copernicus CDS) | 2010–2024, siatka 0,1° (~4 100 punktów), **~0,5 mld wierszy**; pobieranie w toku (31.10: 154 z 360 plików), w biuletynach pogoda na razie dla lat już pobranych | S1, S2, D, H, B1/B2 | 01 |
-| NDVI | MODIS MOD13Q1 (250 m, co 16 dni) z [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/dataset/modis-13Q1-061) | 2001–2024, **~2,8 mld pikseli** Polski (~100 GB) | B1, B2, G, H | 02 |
-| Mapa pól | [ESA WorldCover](https://planetarycomputer.microsoft.com/dataset/esa-worldcover) (Planetary Computer); typy upraw: EUCROPMAP (JRC) | 2021 / 2018 | maska pól | 02 |
+| Pogoda godzinowa | ERA5-Land (Copernicus CDS) | 2010–2024, siatka 0,1° (~4 100 punktów w Polsce), 10 zmiennych, **~0,5 mld wierszy**; pobieranie w toku, w biuletynach i mapach pogoda dla lat już pobranych | S1, S2, D, H, B1/B2 | 01 |
+| NDVI | MODIS MOD13Q1 (250 m, co 16 dni) z [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/dataset/modis-13Q1-061) | 2001–2024, 549 terminów, **~2,8 mld pikseli** Polski (wycinek Polski na HDFS: 8,8 GB) | B1, B2, G, H | 02 |
+| Mapa upraw | [EUCROPMAP](https://data.jrc.ec.europa.eu/collection/id-00346) (JRC, 10 m, z Sentinel-1/2) → udział 6 grup upraw w kwadratach 250 m | 2018, 2022 | maska pól ornych, struktura upraw, krzywe grup upraw | 02 |
 | Pomiary stacji | IMGW (dane publiczne) | 2010–2024, 57 stacji | kalibracja S2, sprawdzanie ERA5-Land | 03 |
 | Granice | GUGiK: WFS (wszystkie naraz) + [ULDK](https://uldk.gugik.gov.pl/opis.html) (jednostka po kodzie TERYT lub punkcie) | województwa, powiaty | wszystkie | 05 |
 | Plony | [GUS BDL API](https://api.stat.gov.pl/Home/BdlApi) | 1999–2024 × 16 województw (**brak danych dla powiatów**) | B2, walidacja B1 | 04 |
@@ -44,10 +44,10 @@ Najważniejsze uwagi (szczegóły w notatnikach):
 
 **Dostępy — jedno konto:**
 - **Copernicus CDS** (pogoda, [instrukcja](https://cds.climate.copernicus.eu/how-to-api)): zaakceptować licencję ERA5-Land, plik `~/.cdsapirc` z tokenem (nie commitujemy), `pip install "cdsapi>=0.7.7"`.
-- Bez kont: Planetary Computer (NDVI, WorldCover), IMGW, GUS (opcjonalny klucz `X-ClientId` podnosi limity 5×), GUGiK.
+- Bez kont: Planetary Computer (NDVI), JRC (EUCROPMAP), IMGW, GUS (opcjonalny klucz `X-ClientId` podnosi limity 5×), GUGiK.
 - **Sieć klastra blokuje magazyn plików Microsoftu** (`*.blob.core.windows.net`, pliki Planetary Computer). NDVI pobieramy więc z laptopa przez VPN i wysyłamy prosto na HDFS (`lib/ingest_modis_ndvi.py`, WebHDFS). Klucz CDS leży na masterze (`~/.cdsapirc`, prawa 600), ERA5-Land pobiera `lib/ingest_era5_land.py` (2 zamówienia na miesiąc — limit wielkości zamówienia w CDS).
 
-**Dane na HDFS** (pliki z replikacją 1 — da się je odtworzyć skryptami):
+**Dane na HDFS** (pliki z replikacją 2 — awaria jednej maszyny nie gubi danych; `REPLICATION` w `lib/webhdfs.py`, Spark: `spark.hadoop.dfs.replication=2`):
 
 | Ścieżka | Co | Skrypt |
 | --- | --- | --- |
@@ -57,6 +57,7 @@ Najważniejsze uwagi (szczegóły w notatnikach):
 | `/rbd/clean/ndvi_counties/` | NDVI pól per powiat i termin (Parquet) — wspólne dla B1, B2, G, H | `lib/ndvi_zonal_spark.py` |
 | `/rbd/clean/b1_*`, `/rbd/clean/b2_phenology/` | wyniki B1 i B2 (też w ClickHouse) | `B1_B2/b1_crop_condition.py`, `B1_B2/b2_phenology.py` |
 | `/rbd/clean/weather_counties_*` | pogoda per powiat: dzień i termin 16-dniowy (opad, ET₀, bilans wody z 60 dni, upały, przymrozki; też w ClickHouse `weather_periods`) | `lib/era5_counties_spark.py` |
+| `/rbd/clean/weather_grid_periods/` | bilans wody (opad − ET₀) na siatce ERA5-Land, ~4 400 punktów × termin — mapy suszy jak w IMGW (też w ClickHouse `weather_grid_periods`) | `lib/era5_kbw_grid_spark.py` |
 | `/rbd/bulletins/<rok>/` | biuletyny PDF: `<powiat>_<rok>_p<termin>.pdf` | `B1_B2/reporter/reporter.py` |
 
 ## 4. Architektura
@@ -88,7 +89,7 @@ flowchart LR
 - H: (1) nagły spadek NDVI poniżej wygładzonej krzywej z G; (2) sezon poniżej mediany z lat 2001–2017. Normy nie liczymy z lat 2018–2024, bo zawierają testowane susze.
 ### B1 + B2 — biuletyn stanu upraw
 
-**Dla kogo i po co.** Instytucje i analitycy (ubezpieczyciele, skupy, doradztwo, administracja) dostają co 16 dni w sezonie (IV–IX) biuletyn PDF dla powiatu ziemskiego (314 powiatów; miasta na prawach powiatu pomijamy), na wzór biuletynu JRC MARS: czy uprawy są w gorszym stanie niż zwykle, czy sezon jest przesunięty i co mogło to spowodować.
+**Cel biznesowy.** Wcześnie i tanio wiedzieć, **gdzie w Polsce uprawy mają się gorzej niż zwykle i dlaczego** — zanim straty pokażą się w plonach i statystykach GUS (te są dostępne dopiero po sezonie i tylko dla województw). Odbiorcy: ubezpieczyciele rolni (gdzie spodziewać się szkód), skupy i przetwórcy (gdzie mniej surowca), doradztwo i administracja (gdzie pomóc, gdzie szacować straty suszowe). Co 16 dni w sezonie (IV–IX) dla każdego z 314 powiatów ziemskich dostają biuletyn PDF na wzór JRC MARS: czy uprawy są w gorszym stanie niż zwykle, czy sezon jest przesunięty i co mogło to spowodować — automatycznie, z danych satelitarnych i pogodowych, bez objazdów w terenie.
 
 - **B1 — stan upraw:** NDVI pól ornych powiatu (maska EUCROPMAP) porównany z normą z **15 poprzednich lat** bez lat skrajnych (do 2010 r. stała 2001–2017; pola z czasem zielenieją, więc porównujemy z niedawną przeszłością). Status: „gorzej niż zwykle / typowo / lepiej niż zwykle” (|z| ≥ 1).
 - **B2 — przebieg sezonu:** z wygładzonej krzywej NDVI (Savitzky–Golay) start i koniec (50% wysokości górki) oraz szczyt; status względem typowych dat: „wcześniej / typowo / później niż zwykle”. Osobne krzywe dla grup upraw (ozime i rzepak, jare zboża, kukurydza, okopowe, łąki) w latach map EUCROPMAP.
@@ -114,13 +115,25 @@ Asynchronicznie: obliczenia tylko wrzucają zlecenia do Kafki i nie czekają na 
 | Część | Kod | Uruchomienie |
 | --- | --- | --- |
 | B1, B2 (Spark) | `B1_B2/b1_crop_condition.py`, `B1_B2/b2_phenology.py`, `B1_B2/b1b2_context.py` | DAG-i `rbd_b1`, `rbd_b2` (`B1_B2/dags/b1_b2_pipeline.py`) |
-| Pogoda per powiat (Spark) | `lib/era5_counties_spark.py` | DAG `rbd_weather_counties` |
+| Pogoda per powiat + mapa bilansu wody (Spark) | `lib/era5_counties_spark.py`, `lib/era5_kbw_grid_spark.py` | DAG `rbd_weather_counties` (oba kroki po kolei) |
 | Biuletyn PDF | `B1_B2/bulletin/build_bulletin.py`, `template.tex` | ręcznie: `--county 3011 --year 2018 --period 10` |
 | Raporter (Kafka → Bielik → PDF) | `B1_B2/reporter/reporter.py`, `bielik.py` | usługa `rbd-reporter`; zlecenia: DAG `rbd_bulletin_requests` albo `B1_B2/reporter/request_bulletins.py` |
 | Bot Telegram | `B1_B2/reporter/telegram_bot.py`, `bot_charts.py` | usługa `rbd-telegram` |
 | Walidacja z GUS | `B1_B2/validate_gus_yields.py`, `lib/gus_bdl.py` | ręcznie (kontener `rbd-python`) |
 
-**Bot Telegram [@bulletin_project_bot](https://t.me/bulletin_project_bot)** — dostarczanie biuletynów zamiast maila (bez filtrów spamu, zapis = zgoda): `/powiat 3011`, `/woj 30`, `/wszystko` — subskrypcja (nowe PDF-y przychodzą same z `bulletin.ready`), `/ostatni`, `/stop`; do tego szybkie odpowiedzi z ClickHouse: `/kody` (lista kodów TERYT), `/mapa 2018 15.07` (mapa Polski: stan upraw), `/wykres 3011 2018` (krzywa NDVI na tle normy), `/woda 3011 2018` (bilans wody), `/porownaj 3011 1206 2018`. Subskrypcje: `rbd.tg_subscribers`, wysyłki: `rbd.tg_log`.
+**Bot Telegram [@bulletin_project_bot](https://t.me/bulletin_project_bot)** — dostarczanie biuletynów (zapis = zgoda, bez filtrów spamu) i mapy/wykresy na żądanie. Format: `/polecenie [powiat] [rok] [dzień]` — powiat kodem TERYT albo nazwą, dzień jako `dd.mm`; pominięte = cała Polska / ostatni rok / koniec czerwca. Pomoc `/start` uczy formatu, błędy podpowiadają poprawny zapis.
+
+| Polecenie | Co daje |
+| --- | --- |
+| `/powiat 3011`, `/woj 30`, `/wszystko` | subskrypcja: nowe PDF-y przychodzą same (z `bulletin.ready`); `/moje`, `/ostatni`, `/stop` |
+| `/mapa 2018 15.07` | mapa Polski: ocena B1 w każdym powiecie |
+| `/ndvi [powiat] 2018 15.07` | NDVI z satelity, piksele 250 m: Polska albo zbliżenie na powiat |
+| `/kbw [powiat] 2018 15.07` | bilans wody z 60 dni na siatce ERA5-Land, klasy jak mapy IMGW (susza < −150 mm) |
+| `/uprawy [powiat] 2022` | mapa upraw EUCROPMAP (grupa przeważająca w kwadracie 250 m) + struktura upraw |
+| `/wykres 3011 2018`, `/woda 3011 2018`, `/porownaj 3011 1206 2018` | krzywa NDVI na tle normy z datami sezonu; opad, ET₀ i bilans wody; dwa powiaty |
+| `/kody`, `/kody 30` | kody województw i powiatów |
+
+Dane bota: ClickHouse (wyniki, `weather_grid_periods`) i HDFS (zdjęcia NDVI, mapa upraw). Subskrypcje: `rbd.tg_subscribers`, wysyłki: `rbd.tg_log`.
 
 **Grafana:** „B1” (mapa powiatów, krzywa na tle normy), „B2” (daty sezonu), „Biuletyny” (lista PDF, udział komentarzy Bielika, czas, przyczyny), „Walidacja B1” (porównanie z plonami GUS).
 
@@ -130,7 +143,7 @@ Asynchronicznie: obliczenia tylko wrzucają zlecenia do Kafki i nie czekają na 
 
 | Usługa | Adres | Gdzie | Uwagi |
 | --- | --- | --- | --- |
-| HDFS 3.4 | http://10.7.11.21:9870, `hdfs://10.7.11.21:9000` | NameNode na masterze, 4 DataNode'y | nasze pliki: replikacja 1 |
+| HDFS 3.4 | http://10.7.11.21:9870, `hdfs://10.7.11.21:9000` | NameNode na masterze, 4 DataNode'y | nasze pliki: replikacja 2 |
 | Spark 4.0 | http://10.7.11.21:8080, `spark://10.7.11.21:7077` | master + 4 workery (24 rdzenie, 160 GB) | zadania: `infra/spark/submit.sh <skrypt.py>` |
 | ClickHouse 26.8 | http://10.7.11.21:8123/play (natywny port 9001) | master | baza `rbd`, użytkownik `rbd` |
 | Grafana 13 | http://10.7.11.21:3000 | master | dashboardy z `infra/grafana/dashboards/` |
@@ -186,15 +199,3 @@ Porównujemy ze źródłami, których **nie używamy w obliczeniach**. Cele to p
 | B1 | plony GUS (województwa, 2004–2024) — **zrobione** | NDVI i plon w tę samą stronę |
 
 **Wynik B1 vs plony GUS** (`B1_B2/validate_gus_yields.py`, dashboard „Walidacja B1”; 1343 pary województwo × rok × uprawa): odchylenie NDVI w sezonie IV–IX koreluje z odchyleniem plonu dla wszystkich upraw (p < 0,001) — jęczmień r = 0,52, pszenica 0,49, buraki 0,30, rzepak 0,22. Gdy ≥ 50% powiatów województwa jest „gorzej niż zwykle”, plon GUS jest poniżej normy w 44% przypadków, a gdy < 10% powiatów — w 9% (pszenica: 59% vs 5%). Najlepiej dla zbóż; rzepak zależy też od zimy i szkodników, buraki od jesieni (poza sezonem IV–IX). Uwaga: plony rosną z roku na rok, więc norma z 15 lat jest zaniżona i „poniżej normy” zdarza się rzadko.
-
-## 8. Ryzyka i plan B
-
-- **Kolejka CDS za wolna** — pogoda z Open-Meteo (`lib/data_downloader.py`, bez konta).
-- **Planetary Computer niedostępny** — ten sam MODIS z NASA LP DAAC (darmowe konto Earthdata).
-- **Serwery bez Dockera lub miejsca** (NDVI ~100 GB + pogoda) — Swarm na laptopach; mniej lat.
-- **EUCROPMAP niedostępny** — sama maska pól z WorldCover (bez typów upraw).
-- **Sieć klastra blokuje Telegram** (`api.telegram.org`) — bot łączy się przez tunel SSH z laptopa (`infra/telegram/tunnel.ps1`); bez tunelu bot czeka, a biuletyny zostają w Kafce. Docelowo: wyjątek w zaporze od administratora.
-- **Bielik wolny na CPU** (ok. 3–5 min na komentarz) — 2 raportery równolegle (ok. 24 biuletyny/h); gdy model nie odpowie lub odpowiedź nie przejdzie sprawdzenia, biuletyn i tak powstaje z tekstami z reguł.
-- Do ustalenia: współrzędne stacji IMGW, straty zimowe GUS per województwo, pliki z European Drought Observatory.
-
-**Minimum na zaliczenie:** dane w HDFS + G + D z replayem zimy 2011/12, w Swarmie, wyniki w Grafanie.

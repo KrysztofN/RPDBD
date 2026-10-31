@@ -2,7 +2,7 @@
 Prosty klient HDFS przez WebHDFS (HTTP) — bez instalowania klienta Hadoop w kontenerze.
 
 Co robi:
-  WebHDFS(url, user).put(lokalny_plik, ścieżka_hdfs, replication=1)  — zapis pliku z podaną replikacją
+  WebHDFS(url, user).put(lokalny_plik, ścieżka_hdfs)                 — zapis pliku (REPLICATION = 2 kopie)
   .exists(), .list(), .mkdirs(), .status()                            — odczyt informacji o plikach
   .read_bytes(ścieżka_hdfs)                                           — odczyt małego pliku w całości
   Z linii poleceń: python -m lib.webhdfs put <plik|katalog> <katalog_hdfs> | ls <ścieżka>
@@ -10,8 +10,8 @@ Co robi:
 Trochę teorii:
   NameNode wystawia REST API na porcie 9870. Zapis jest dwuetapowy: NameNode odpowiada przekierowaniem (307)
   na konkretny DataNode (port 9864), a dane wysyłamy już bezpośrednio do niego. Replikację podajemy przy
-  zapisie (parametr `replication`), więc nasze pliki mogą mieć 1 kopię, a domyślna replikacja klastra (3)
-  zostaje bez zmian dla innych. Uwierzytelnianie „simple”: nazwa użytkownika HDFS w parametrze `user.name`.
+  zapisie (parametr `replication`). Nasze pliki mają 2 kopie (REPLICATION): awaria jednej maszyny nie gubi
+  danych, a zajmujemy 2/3 miejsca domyślnej replikacji klastra (3). Uwierzytelnianie „simple”: nazwa użytkownika HDFS w parametrze `user.name`.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ log = get_logger(__name__)
 
 DEFAULT_URL = os.environ.get("RBD_WEBHDFS_URL", "http://localhost:9870")
 DEFAULT_USER = os.environ.get("RBD_HDFS_USER", "hadoop")
+REPLICATION = 2                 # kopie naszych plików na HDFS (Spark: spark.hadoop.dfs.replication=2)
 
 
 def _parse_host_map(text: str) -> dict[str, str]:
@@ -87,7 +88,7 @@ class WebHDFS:
         r = self.session.put(self._url(path), params=self._params("MKDIRS"), timeout=self.timeout)
         r.raise_for_status()
 
-    def put(self, local_path: str | Path, hdfs_path: str, replication: int = 1, overwrite: bool = False) -> None:
+    def put(self, local_path: str | Path, hdfs_path: str, replication: int = REPLICATION, overwrite: bool = False) -> None:
         """Zapis pliku: NameNode -> przekierowanie -> DataNode. Replikacja ustawiana dla tego pliku."""
         params = self._params("CREATE", replication=replication, overwrite=str(overwrite).lower())
         r = self.session.put(self._url(hdfs_path), params=params, allow_redirects=False, timeout=self.timeout)
@@ -116,7 +117,7 @@ class WebHDFS:
 # --------------------------------------------------------------------------- linia poleceń
 def _cli() -> None:
     """
-    python -m lib.webhdfs put <plik|katalog> <katalog_hdfs> [--replication 1] [--overwrite]
+    python -m lib.webhdfs put <plik|katalog> <katalog_hdfs> [--replication 2] [--overwrite]
     python -m lib.webhdfs ls <ścieżka_hdfs>
     Katalog wysyłany jest rekurencyjnie (z zachowaniem podkatalogów). Adres i mapa hostów: zmienne
     RBD_WEBHDFS_URL, RBD_HDFS_HOST_MAP (patrz WebHDFS).
@@ -133,7 +134,7 @@ def _cli() -> None:
     put = sub.add_parser("put", help="wyślij plik albo katalog")
     put.add_argument("local", type=Path)
     put.add_argument("hdfs_dir")
-    put.add_argument("--replication", type=int, default=1)
+    put.add_argument("--replication", type=int, default=REPLICATION)
     put.add_argument("--overwrite", action="store_true")
     ls = sub.add_parser("ls", help="lista plików")
     ls.add_argument("hdfs_path")

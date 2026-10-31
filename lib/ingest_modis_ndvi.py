@@ -36,7 +36,7 @@ from lib import boundaries
 from lib import modis_ingest as mi
 from lib import ndvi_tools as nt
 from lib.log import Progress, Timer, get_logger, setup_logging
-from lib.webhdfs import DEFAULT_URL, DEFAULT_USER, WebHDFS
+from lib.webhdfs import DEFAULT_URL, DEFAULT_USER, REPLICATION, WebHDFS
 
 ROOT = Path(__file__).resolve().parents[1]
 log = get_logger(Path(__file__).stem)
@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hdfs-dir", default=HDFS_DIR)
     p.add_argument("--webhdfs-url", default=DEFAULT_URL)
     p.add_argument("--hdfs-user", default=DEFAULT_USER)
-    p.add_argument("--replication", type=int, default=1)
+    p.add_argument("--replication", type=int, default=REPLICATION)
     p.add_argument("--data-dir", type=Path, default=ROOT / "data", help="lokalny cache granic powiatów")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("-q", "--quiet", action="store_true")
