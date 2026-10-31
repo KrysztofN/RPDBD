@@ -34,6 +34,7 @@ x-airflow: &airflow
   volumes: &airflow-volumes
     - airflow-logs:/opt/airflow/logs
     - ${HOME}/rbd-build/app/infra/airflow/dags:/opt/airflow/dags/infra:ro
+    - ${HOME}/rbd-build/app/B1_B2/dags:/opt/airflow/dags/b1_b2:ro
   deploy: &airflow-deploy
     placement:
       constraints: [node.role == manager]
@@ -79,6 +80,7 @@ services:
     volumes:
       - airflow-logs:/opt/airflow/logs
       - ${HOME}/rbd-build/app/infra/airflow/dags:/opt/airflow/dags/infra:ro
+      - ${HOME}/rbd-build/app/B1_B2/dags:/opt/airflow/dags/b1_b2:ro
       - /var/run/docker.sock:/var/run/docker.sock
     # grupa docker na masterze (GID 988) jako grupa główna -> dostęp do docker.sock
     # (Swarm nie obsługuje group_add; katalogi Airflow należą do UID 50000, więc zmiana grupy ich nie blokuje)
