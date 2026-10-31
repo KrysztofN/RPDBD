@@ -7,8 +7,12 @@ Co robi:
                  krzywe na jednym wykresie (porównanie);
   water_png    — opad, parowanie (ET₀) i bilans wody z 60 dni na tle typowego i progu suszy; dla 2 powiatów
                  porównanie bilansów;
+  ndvi_map_png — NDVI pikseli 250 m z pliku MODIS terminu (HDFS): cała Polska albo zbliżenie na powiat;
+  kbw_map_png  — bilans wody z 60 dni na siatce ERA5-Land (rbd.weather_grid_periods) w klasach jak mapy IMGW:
+                 cała Polska albo zbliżenie na powiat;
   *_text       — 2–4 zdania z tymi samymi liczbami (podpis pod obrazkiem).
-Dane z ClickHouse (b1b2_periods, b1_periods, b2_phenology, weather_periods), kolory i progi jak w biuletynie PDF.
+Dane z ClickHouse (b1b2_periods, b1_periods, b2_phenology, weather_periods, weather_grid_periods) i HDFS (NDVI),
+kolory i progi jak w biuletynie PDF.
 
 Trochę teorii:
   NDVI (0–1) mierzy „zieloność” roślin z satelity; norma = średnia z 15 poprzednich lat bez lat skrajnych.
@@ -204,3 +208,184 @@ def _water_line(name: str, yr: pd.DataFrame, ws: dict | None) -> str:
     if ws and ws["n_ref"] and worst_p in ws["norm"].index:
         text += f" Typowo w tym terminie: {num(ws['norm'].loc[worst_p, 'kbw_60d_mm'])} mm."
     return text
+
+
+# ---------------------------------------------------------------- mapy rastrowe: NDVI pikseli i bilans wody na siatce
+MAP_CRS = "EPSG:2180"                         # układ granic PRG (metry) — mapy rysujemy w nim
+NDVI_DIR = "/rbd/raw/modis_ndvi_poland"
+NDVI_COLORS = ["#8C510A", "#D8B365", "#F6E8C3", "#C7E9C0", "#74C476", "#238B45", "#00441B"]   # 0 → 0,9
+NO_DATA_GREY = "#9E9E9E"
+KBW_BOUNDS = [-200, -150, -100, -50, 0, 50, 100]                                  # klasy mapy bilansu [mm]
+KBW_COLORS = ["#7F2704", "#CC4C02", "#F16913", "#FDB863", "#FFF5C0", "#C6E2F0", "#6BAED6", "#2166AC"]
+
+
+def _target_grid(area, pad: float, res: float):
+    """Siatka mapy (EPSG:2180) obejmująca obszar z marginesem -> (transform, (wiersze, kolumny), extent)."""
+    from rasterio.transform import from_origin
+    minx, miny, maxx, maxy = area.total_bounds
+    minx, miny, maxx, maxy = minx - pad, miny - pad, maxx + pad, maxy + pad
+    shape = (int(np.ceil((maxy - miny) / res)), int(np.ceil((maxx - minx) / res)))
+    return from_origin(minx, maxy, res, res), shape, (minx, minx + shape[1] * res, maxy - shape[0] * res, maxy)
+
+
+def _inside(area, transform, shape) -> np.ndarray:
+    from rasterio.features import rasterize
+    return rasterize(((g, 1) for g in area.geometry), out_shape=shape, transform=transform, fill=0,
+                     dtype="uint8").astype(bool)
+
+
+def _finish_rgba(rgba: np.ndarray, inside: np.ndarray, county: bool) -> np.ndarray:
+    """Poza obszarem: biało (Polska) albo przygaszone tło sąsiadów (powiat)."""
+    if county:
+        rgba[~inside, :3] = rgba[~inside, :3] * 0.35 + 0.65
+    else:
+        rgba[~inside] = (1, 1, 1, 1)
+    return rgba
+
+
+def voivodeships(geo_full):
+    """Granice województw z pełnych granic powiatów (sklejone przed uproszczeniem — bez szczelin), do map Polski."""
+    v = geo_full.dissolve(by=geo_full["region_id"].str[:2])
+    return v.set_geometry(v.geometry.simplify(500))
+
+
+def _outlines(ax, geo, place, extent, voiv=None):
+    """Granice: województwa (Polska) albo sąsiednie powiaty + wybrany powiat (zbliżenie)."""
+    if place is None:
+        (voiv if voiv is not None else geo).boundary.plot(ax=ax, color="black", lw=0.4)
+    else:
+        geo.boundary.plot(ax=ax, color="#555555", lw=0.4)
+        geo[geo["region_id"] == place[0]].boundary.plot(ax=ax, color="black", lw=1.6)
+    ax.set_xlim(extent[0], extent[1])
+    ax.set_ylim(extent[2], extent[3])
+    ax.set_axis_off()
+
+
+def ndvi_map_png(ch, geo, year: int, period: int, place: tuple[str, str] | None = None,
+                 voiv=None) -> tuple[bytes | None, str]:
+    """NDVI pikseli 250 m z pliku MODIS terminu: cała Polska albo zbliżenie na powiat (geo: granice EPSG:2180)."""
+    import rasterio
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import LinearSegmentedColormap, Normalize, to_rgba
+    from matplotlib.patches import Patch
+    from rasterio.io import MemoryFile
+    from rasterio.warp import Resampling, reproject
+
+    from lib.webhdfs import WebHDFS
+
+    start = date(year, 1, 1) + timedelta(days=16 * period)
+    try:
+        data = WebHDFS().read_bytes(f"{NDVI_DIR}/{year}/modis_ndvi_poland_{start}.tif")
+    except Exception:                                            # brak pliku terminu (np. koniec roku 2024)
+        return None, f"Brak zdjęcia NDVI dla terminu {period_label(year, period)}."
+    area = (voiv if voiv is not None else geo) if place is None else geo[geo["region_id"] == place[0]]   # maska bez szczelin
+    transform, shape, extent = _target_grid(area, 5000 if place else 2000, 250)
+    ndvi = np.full(shape, -3000, dtype=np.int16)
+    rel = np.full(shape, 255, dtype=np.int16)
+    with MemoryFile(data) as mf, mf.open() as src:
+        for band, dst, nodata in ((1, ndvi, -3000), (2, rel, 255)):
+            reproject(rasterio.band(src, band), dst, dst_transform=transform, dst_crs=MAP_CRS,
+                      resampling=Resampling.nearest, src_nodata=nodata, dst_nodata=nodata)
+    inside = _inside(area, transform, shape)
+    valid = (ndvi >= -2000) & (ndvi <= 10000) & np.isin(rel, (0, 1))   # te same zasady co w obliczeniach B1/B2
+    val = ndvi / 10000.0
+
+    cmap, norm = LinearSegmentedColormap.from_list("ndvi", NDVI_COLORS), Normalize(0, 0.9)
+    rgba = cmap(norm(np.clip(val, 0, 0.9)))
+    rgba[~valid] = to_rgba(NO_DATA_GREY)
+    rgba[~valid & (rel == 255)] = (1, 1, 1, 1)                  # poza zdjęciem
+    rgba = _finish_rgba(rgba, inside, place is not None)
+
+    plt = _plt()
+    fig, ax = plt.subplots(figsize=(7, 6.6) if place is None else (6.4, 6))
+    ax.imshow(rgba, extent=extent, interpolation="nearest")
+    _outlines(ax, geo, place, extent, voiv)
+    fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=0.55, pad=0.01, label="NDVI")
+    ax.legend(handles=[Patch(color=NO_DATA_GREY, label="brak danych (chmura, śnieg)")], fontsize=8,
+              loc="lower left", frameon=False)
+    where = "Polska" if place is None else place[1]
+    ax.set_title(f"NDVI z satelity (MODIS, 250 m): {where}, {period_label(year, period)}", fontsize=10)
+    fig.tight_layout(pad=0.2)
+
+    n = int(inside.sum())
+    gone = 100 * int((inside & ~valid).sum()) / n if n else 0
+    mean = float(val[inside & valid].mean()) if (inside & valid).any() else float("nan")
+    text = (f"NDVI {where}, {period_label(year, period)}: średnio {num(mean, 2)} (wszystkie piksele: pola, łąki, "
+            f"lasy); bez danych (chmura, śnieg): {num(gone)}%.")
+    if place is None:
+        st = ch.query_df(f"SELECT status FROM rbd.b1_periods WHERE year = {year} AND period = {period}")["status"]
+        if len(st):
+            text += (f" Pola orne: gorzej niż zwykle w {int((st == 'gorzej niż zwykle').sum())} z {len(st)} powiatów"
+                     " (/mapa).")
+    else:
+        b1 = ch.query_df(f"SELECT pct_of_norm, status FROM rbd.b1_periods WHERE region_id = '{place[0]}' "
+                         f"AND year = {year} AND period = {period}")
+        if len(b1) and pd.notna(b1["pct_of_norm"].iloc[0]):
+            text += f" Pola orne powiatu: {num(b1['pct_of_norm'].iloc[0])}% normy — {b1['status'].iloc[0]}."
+    return _png(fig), text
+
+
+def kbw_years(ch) -> list[int]:
+    try:
+        return [int(y) for y in ch.query_df("SELECT DISTINCT year FROM rbd.weather_grid_periods ORDER BY year")["year"]]
+    except Exception:                                            # tabela jeszcze nie policzona
+        return []
+
+
+def kbw_map_png(ch, geo, year: int, period: int, place: tuple[str, str] | None = None,
+                voiv=None) -> tuple[bytes | None, str]:
+    """Bilans wody z 60 dni (opad − ET₀) na siatce ERA5-Land, w klasach jak mapy IMGW: Polska albo powiat."""
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from rasterio.transform import from_origin
+    from rasterio.warp import Resampling, reproject
+
+    df = ch.query_df(f"SELECT lat, lon, kbw_60d_mm, kbw_60d_days FROM rbd.weather_grid_periods "
+                     f"WHERE year = {year} AND period = {period}")
+    if df.empty:
+        return None, f"Brak bilansu wody dla terminu {period_label(year, period)}."
+    lat_max, lon_min = float(df["lat"].max()), float(df["lon"].min())
+    rows = np.round((lat_max - df["lat"].to_numpy()) / 0.1).astype(int)
+    cols = np.round((df["lon"].to_numpy() - lon_min) / 0.1).astype(int)
+    src = np.full((rows.max() + 1, cols.max() + 1), np.nan, dtype=np.float32)
+    src[rows, cols] = df["kbw_60d_mm"].to_numpy()
+
+    area = (voiv if voiv is not None else geo) if place is None else geo[geo["region_id"] == place[0]]   # maska bez szczelin
+    transform, shape, extent = _target_grid(area, 15000 if place else 2000, 1000 if place is None else 250)
+    arr = np.full(shape, np.nan, dtype=np.float32)
+    reproject(src, arr, src_transform=from_origin(lon_min - 0.05, lat_max + 0.05, 0.1, 0.1), src_crs="EPSG:4326",
+              dst_transform=transform, dst_crs=MAP_CRS, resampling=Resampling.bilinear,   # płynnie, jak mapy IMGW
+              src_nodata=np.nan, dst_nodata=np.nan)
+    inside = _inside(area, transform, shape)
+
+    cmap = ListedColormap(KBW_COLORS)
+    norm = BoundaryNorm(KBW_BOUNDS, cmap.N, extend="both")
+    rgba = cmap(norm(np.nan_to_num(arr, nan=0)))
+    rgba[~np.isfinite(arr)] = (1, 1, 1, 1)
+    rgba = _finish_rgba(rgba, inside, place is not None)
+
+    plt = _plt()
+    fig, ax = plt.subplots(figsize=(7, 6.6) if place is None else (6.4, 6))
+    ax.imshow(rgba, extent=extent, interpolation="bilinear")
+    _outlines(ax, geo, place, extent, voiv)
+    cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=0.55, pad=0.01, extend="both",
+                      ticks=KBW_BOUNDS, label="bilans wody z 60 dni [mm]")
+    cb.ax.axhline(DROUGHT_KBW_60D, color="black", lw=1.2)
+    where = "Polska" if place is None else place[1]
+    ax.set_title(f"Bilans wody (opad − parowanie) z 60 dni: {where}\nkoniec okresu: {period_label(year, period)}",
+                 fontsize=10)
+    fig.tight_layout(pad=0.2)
+
+    v = arr[inside & np.isfinite(arr)]
+    text = (f"Bilans wody z 60 dni (opad − parowanie ET₀, ERA5-Land ~9 km), {where}, do końca terminu "
+            f"{period_label(year, period)}: średnio {num(v.mean())} mm, od {num(v.min())} do {num(v.max())} mm; "
+            f"susza (< −150 mm) na {num(100 * (v < DROUGHT_KBW_60D).mean())}% powierzchni.")
+    if place is not None:
+        w = ch.query_df(f"SELECT kbw_60d_mm FROM rbd.weather_periods WHERE region_id = '{place[0]}' "
+                        f"AND year = {year} AND period = {period}")
+        if len(w) and pd.notna(w["kbw_60d_mm"].iloc[0]):
+            text += f" Wartość powiatu w biuletynie: {num(w['kbw_60d_mm'].iloc[0])} mm."
+    days = int(df["kbw_60d_days"].min())
+    if days < 60:
+        text += f" Uwaga: brak części danych pogodowych — bilans liczony z {days} dni."
+    return _png(fig), text

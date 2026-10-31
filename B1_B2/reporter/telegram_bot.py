@@ -4,6 +4,7 @@ Bot Telegram biuletynów B1/B2: zapisy na biuletyny i wysyłka PDF do subskryben
 Co robi (pętla, usługa Swarma na masterze):
   1. odbiera polecenia od ludzi (Telegram getUpdates):
        /start            — opis i lista poleceń
+       /mapa, /ndvi, /kbw, /wykres, /woda, /porownaj, /kody — mapy i wykresy na żądanie (bot_charts.py)
        /powiat 3011      — subskrypcja powiatu (kod TERYT albo nazwa, np. /powiat poznański)
        /woj 30           — subskrypcja całego województwa (kod albo nazwa, np. /woj wielkopolskie)
        /wszystko         — wszystkie powiaty
@@ -68,6 +69,8 @@ HELP = (
     "Powiat podajesz kodem (3011) albo nazwą (poznański).\n\n"
     "Wykresy (rok opcjonalny, domyślnie ostatni z danymi):\n"
     "/mapa 2018 15.07 — mapa Polski: stan upraw w powiatach w danym dniu\n"
+    "/ndvi 2018 15.07 — NDVI z satelity (piksele 250 m) dla Polski; /ndvi 3011 2018 15.07 — dla powiatu\n"
+    "/kbw 2018 15.07 — bilans wody z 60 dni (susza) dla Polski; /kbw 3011 2018 15.07 — dla powiatu\n"
     "/wykres 3011 2018 — krzywa NDVI powiatu na tle normy\n"
     "/woda 3011 2018 — opad, parowanie i bilans wody (susza)\n"
     "/porownaj 3011 1206 2018 — dwa powiaty: NDVI i bilans wody\n\n"
@@ -76,6 +79,8 @@ HELP = (
     "/moje — moje subskrypcje, /ostatni — przyślij ostatni gotowy biuletyn, /stop — wypisz mnie")
 
 COMMANDS = [("kody", "lista kodów województw i powiatów"), ("mapa", "mapa Polski: stan upraw, np. /mapa 2018 15.07"),
+            ("ndvi", "mapa NDVI 250 m: Polska lub powiat, np. /ndvi 3011 2018 15.07"),
+            ("kbw", "mapa bilansu wody (susza): Polska lub powiat, np. /kbw 2018 15.07"),
             ("wykres", "krzywa NDVI powiatu, np. /wykres 3011 2018"), ("woda", "bilans wody powiatu, np. /woda 3011 2018"),
             ("porownaj", "dwa powiaty, np. /porownaj 3011 1206 2018"), ("powiat", "subskrypcja biuletynów powiatu"),
             ("woj", "subskrypcja biuletynów województwa"), ("wszystko", "subskrypcja całej Polski"),
@@ -138,10 +143,12 @@ class Bot:
                                     "WHERE is_city = 0 ORDER BY region_id")
         self.years = [int(y) for y in ch.query_df("SELECT DISTINCT year FROM rbd.b1_periods ORDER BY year")["year"]]
         self._geo = None                                         # granice powiatów do mapy (wczytane przy 1. /mapa)
+        self._geo_cache = {}                                     # granice województw (map Polski)
 
     # ---------- wykresy ----------
 
-    def geo(self):
+    def geo(self, full: bool = False):
+        """Granice powiatów (EPSG:2180): uproszczone do 800 m (cała Polska, szybko) albo pełne (zbliżenie na powiat)."""
         if self._geo is None:
             import io
 
@@ -153,8 +160,64 @@ class Bot:
                 warnings.simplefilter("ignore", RuntimeWarning)
                 g = gpd.read_file(io.BytesIO(WebHDFS().read_bytes(REF_BOUNDARIES)))
             g = g.assign(region_id=g["JPT_KOD_JE"].astype(str))[["region_id", "geometry"]]
-            self._geo = g.set_geometry(g.geometry.simplify(800))  # 800 m: mapa całej Polski, szybkie rysowanie
-        return self._geo
+            self._geo = {True: g, False: g.set_geometry(g.geometry.simplify(800))}
+        return self._geo[full]
+
+    def voiv(self):
+        """Granice województw do map Polski (liczone raz, z pełnych granic)."""
+        from B1_B2.reporter import bot_charts as bc
+        if "voiv" not in self._geo_cache:
+            self._geo_cache["voiv"] = bc.voivodeships(self.geo(full=True))
+        return self._geo_cache["voiv"]
+
+    def map_args(self, arg: str, years: list[int]):
+        """'[powiat] [rok] [dd.mm]' -> (powiat (kod, nazwa) albo None, rok, termin, błąd).
+        Sam 4-cyfrowy numer to rok (np. /ndvi 2018); powiat z kodem 20xx podaj razem z rokiem: /ndvi 2007 2018."""
+        from B1_B2.reporter import bot_charts as bc
+        if not years:
+            return None, None, None, "Brak danych do tej mapy."
+        tokens, day_month = arg.split(), None
+        for t in list(tokens):                                   # data: 15.07 albo 15.07.2018
+            m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?", t)
+            if m:
+                tokens.remove(t)
+                if m.group(3):
+                    tokens.append(m.group(3))
+                day_month = (int(m.group(1)), int(m.group(2)))
+        year = years[-1]
+        if tokens and re.fullmatch(r"\d{4}", tokens[-1]) and (len(tokens) > 1 or 1990 <= int(tokens[-1]) <= 2100):
+            year = int(tokens.pop())
+        if year not in years:
+            have = f"{years[0]}–{years[-1]}" if years[-1] - years[0] + 1 == len(years) else ", ".join(map(str, years))
+            return None, None, None, f"Brak danych dla roku {year}. Dostępne: {have}."
+        place = None
+        if tokens:
+            scope, err = self.find_scope("county", " ".join(tokens))
+            if scope is None:
+                return None, None, None, f"„{' '.join(tokens)}”: {err}"
+            code = scope.split(":")[1]
+            place = (code, self.counties.loc[self.counties["region_id"] == code, "county_name"].iloc[0])
+        try:
+            period = bc.period_of(date(year, day_month[1], day_month[0])) if day_month else MAP_DEFAULT_PERIOD
+        except ValueError:
+            return None, None, None, "Zła data. Przykład: 15.07"
+        return place, year, period, ""
+
+    def cmd_raster_map(self, chat_id: int, kind: str, arg: str) -> None:
+        """/ndvi i /kbw: mapa Polski albo powiatu dla roku i terminu."""
+        from B1_B2.reporter import bot_charts as bc
+        years = self.years if kind == "ndvi" else bc.kbw_years(self.ch)
+        place, year, period, err = self.map_args(arg, years)
+        if err:
+            self.tg.send_text(chat_id, err)
+            return
+        draw = bc.ndvi_map_png if kind == "ndvi" else bc.kbw_map_png
+        png, text = draw(self.ch, self.geo(full=place is not None), year, period, place,
+                         voiv=self.voiv() if place is None else None)
+        if png is None:
+            self.tg.send_text(chat_id, text)
+        else:
+            self.tg.send_photo(chat_id, png, text + f"\nInaczej: /{kind} 3011 2018 15.07 (powiat, rok, dzień)")
 
     def parse_year(self, tokens: list[str], keep: int, default: int | None = None) -> tuple[int | None, str]:
         """Ostatni token = rok, jeśli to 4 cyfry i zostaje `keep` innych tokenów (kod powiatu też ma 4 cyfry).
@@ -186,23 +249,9 @@ class Bot:
 
     def cmd_map(self, chat_id: int, arg: str) -> None:
         from B1_B2.reporter import bot_charts as bc
-        tokens, period = arg.split(), None
-        for t in list(tokens):                                   # data: 15.07 albo 15.07.2018
-            m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?", t)
-            if m:
-                tokens.remove(t)
-                if m.group(3):
-                    tokens.append(m.group(3))
-                day, month = int(m.group(1)), int(m.group(2))
-                period = (day, month)
-        year, err = self.parse_year(tokens, 0)
+        _, year, p, err = self.map_args(arg, self.years)
         if err:
             self.tg.send_text(chat_id, err)
-            return
-        try:
-            p = bc.period_of(date(year, period[1], period[0])) if period else MAP_DEFAULT_PERIOD
-        except ValueError:
-            self.tg.send_text(chat_id, "Zła data. Przykład: /mapa 2018 15.07")
             return
         png, text = bc.map_png(self.ch, self.geo(), year, p)
         self.tg.send_photo(chat_id, png, text + "\nInny dzień: /mapa 2018 15.07")
@@ -309,6 +358,10 @@ class Bot:
             self.cmd_codes(chat_id, arg)
         elif cmd == "/mapa":
             self.cmd_map(chat_id, arg)
+        elif cmd == "/ndvi":
+            self.cmd_raster_map(chat_id, "ndvi", arg)
+        elif cmd == "/kbw":
+            self.cmd_raster_map(chat_id, "kbw", arg)
         elif cmd == "/wykres":
             self.cmd_chart(chat_id, "ndvi", arg, 1)
         elif cmd == "/woda":

@@ -4,6 +4,7 @@ Airflow: przepływ B1 + B2 + biuletyn — osobne DAG-i spięte zbiorami danych (
 DAG-i:
   rbd_ndvi_counties      (ręcznie, parametr: rok)  Spark: NDVI pól per powiat z HDFS          -> Asset ndvi_counties
   rbd_weather_counties   (ręcznie)                 Spark: pogoda ERA5-Land per powiat          -> Asset weather_counties
+                                                   potem bilans wody na siatce ERA5 (mapy /kbw w bocie)
   rbd_b1                 (gdy nowe ndvi_counties)  Spark: stan upraw vs norma                  -> Asset b1
   rbd_b2                 (gdy nowe ndvi_counties)  Spark: fenologia + widoki B1+B2 w ClickHouse -> Asset b2
   rbd_bulletin_requests  (gdy nowe b1 I b2)        zlecenia biuletynów do Kafki (powiaty/rok/termin ze zmiennych)
@@ -72,7 +73,8 @@ with DAG("rbd_ndvi_counties", schedule=None, description="NDVI pól per powiat (
                "--years {{ params.year_from }} {{ params.year_to }}", outlets=[NDVI_COUNTIES])
 
 with DAG("rbd_weather_counties", schedule=None, description="Pogoda ERA5-Land per powiat (Spark)", **DEFAULTS):
-    spark_task("weather_counties", "lib/era5_counties_spark.py", outlets=[WEATHER])
+    spark_task("weather_counties", "lib/era5_counties_spark.py", outlets=[WEATHER]) \
+        >> spark_task("weather_grid", "lib/era5_kbw_grid_spark.py")        # mapa bilansu wody (bot: /kbw)
 
 with DAG("rbd_b1", schedule=[NDVI_COUNTIES], description="B1: stan upraw vs norma krocząca", **DEFAULTS):
     spark_task("b1_crop_condition", "B1_B2/b1_crop_condition.py", outlets=[B1])
