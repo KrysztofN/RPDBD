@@ -13,7 +13,7 @@ RUN apt-get update \
         texlive-latex-base texlive-latex-recommended texlive-latex-extra \
         texlive-fonts-recommended texlive-lang-polish lmodern latexmk \
  && rm -rf /var/lib/apt/lists/* \
- && python3 -m pip install --no-cache-dir confluent-kafka==2.15.1
+ && python3 -m pip install --no-cache-dir confluent-kafka==2.15.1 PySocks==1.7.1
 
 COPY lib /app/lib
 COPY B1_B2 /app/B1_B2

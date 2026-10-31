@@ -1,0 +1,36 @@
+# Bot Telegram biuletynów: jedna usługa na masterze (obraz rbd-reporter, kod B1_B2/reporter/telegram_bot.py).
+#
+# Odbiera polecenia (/powiat, /woj, /wszystko, /stop ...) i wysyła PDF z tematu Kafki bulletin.ready subskrybentom
+# z rbd.tg_subscribers; log w rbd.tg_log. Token bota w ~/rbd-build/telegram/.env na masterze — NIE w repo.
+# Tylko JEDNA kopia: dwa boty z tym samym tokenem kłóciłyby się o polecenia (Telegram: konflikt getUpdates).
+#
+# Wdrożenie (na masterze):
+#   set -a; . ~/rbd-build/clickhouse/.env; . ~/rbd-build/telegram/.env; set +a
+#   docker stack deploy -c stack.yml --resolve-image never rbd-telegram
+# Logi: docker service logs -f rbd-telegram_bot
+
+services:
+  bot:
+    image: rbd-reporter:0.1
+    command: ["python3", "-m", "B1_B2.reporter.telegram_bot"]
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_PROXY: ${TELEGRAM_PROXY}            # tunel SSH przez laptop (sieć klastra blokuje Telegram)
+      RBD_CLICKHOUSE_URL: http://10.7.11.21:8123
+      RBD_WEBHDFS_URL: http://10.7.11.21:9870
+      RBD_HDFS_HOST_MAP: Bigdata-wn212-02=10.7.11.22,Bigdata-wn212-03=10.7.11.23,Bigdata-wn212-04=10.7.11.24,Bigdata-wn212-05=10.7.11.25
+      RBD_KAFKA_BOOTSTRAP: 10.7.11.22:9092,10.7.11.23:9092,10.7.11.24:9092
+    networks: [hostnet]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: any
+        delay: 30s
+
+networks:
+  hostnet:
+    external: true
+    name: host
