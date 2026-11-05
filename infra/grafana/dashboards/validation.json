@@ -1,0 +1,74 @@
+{
+  "uid": "rbd-validation",
+  "title": "Walidacja B1 — NDVI vs plony GUS",
+  "description": "Czy „gorzej niż zwykle” z satelity idzie w parze z niższymi plonami GUS? Województwa × lata. Źródło: rbd.validation_gus, rbd.validation_summary (B1_B2/validate_gus_yields.py).",
+  "tags": ["rbd", "b1", "walidacja"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 41,
+  "time": { "from": "now-30d", "to": "now" },
+  "templating": { "list": [
+    { "name": "crop", "label": "Uprawa", "type": "query",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "query": "SELECT DISTINCT crop FROM rbd.validation_gus ORDER BY crop",
+      "current": { "text": "pszenica", "value": "pszenica" }, "refresh": 1 },
+    { "name": "year", "label": "Rok", "type": "query",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "query": "SELECT DISTINCT toString(year) FROM rbd.validation_gus ORDER BY year DESC",
+      "current": { "text": "2018", "value": "2018" }, "refresh": 1 }
+  ] },
+  "panels": [
+    {
+      "id": 1, "type": "table", "title": "Wynik: zgodność z plonami GUS",
+      "description": "Korelacja r: −1…1, > 0 = satelita i GUS wskazują ten sam kierunek; p < 0,05 = mało prawdopodobne, że przypadek. Trafność: jak często plon był poniżej normy, gdy ≥ 50% powiatów było „gorzej niż zwykle” (dla porównania: gdy < 10%).",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT crop AS uprawa, metric AS miara, value AS wynik, if(isNull(p_value), '', if(p_value < 0.001, '< 0,001', toString(round(p_value, 3)))) AS p, n FROM rbd.validation_summary ORDER BY crop = 'wszystkie' DESC, crop, metric" } ],
+      "options": { "showHeader": true, "cellHeight": "sm" },
+      "fieldConfig": { "defaults": {}, "overrides": [
+        { "matcher": { "id": "byName", "options": "miara" }, "properties": [ { "id": "custom.width", "value": 520 } ] } ] }
+    },
+    {
+      "id": 2, "type": "xychart", "title": "$crop: odchylenie NDVI (V–VI) vs odchylenie plonu — województwa × lata",
+      "description": "Każdy punkt = województwo w roku. Prawy górny / lewy dolny róg = zgodność (satelita i GUS w tę samą stronę).",
+      "gridPos": { "h": 11, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT round(ndvi_v_vi_anom_pct, 2) AS `NDVI V–VI [% normy]`, round(yield_anom_pct, 1) AS `plon GUS [% normy]` FROM rbd.validation_gus WHERE crop = ${crop:singlequote} AND isFinite(ndvi_v_vi_anom_pct)" } ],
+      "options": { "mapping": "auto", "series": [ {} ], "legend": { "showLegend": false },
+                   "tooltip": { "mode": "single" } },
+      "fieldConfig": { "defaults": { "unit": "percent", "color": { "mode": "fixed", "fixedColor": "#2E8B57" },
+        "custom": { "show": "points", "pointSize": { "fixed": 6 } } }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "barchart", "title": "$crop: Polska rok po roku (średnia województw)",
+      "description": "Słupki: średnie odchylenie od normy w województwach. Lata suszy (np. 2015, 2018, 2019) powinny mieć oba słupki poniżej zera.",
+      "gridPos": { "h": 11, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT toString(year) AS rok, round(avg(ndvi_v_vi_anom_pct), 2) AS `NDVI V–VI`, round(avg(yield_anom_pct), 1) AS `plon GUS` FROM rbd.validation_gus WHERE crop = ${crop:singlequote} GROUP BY year ORDER BY year" } ],
+      "options": { "xField": "rok", "orientation": "vertical", "groupWidth": 0.75, "barWidth": 0.9,
+                   "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" }, "xTickLabelRotation": -45 },
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "NDVI V–VI" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#2E8B57" } } ] },
+        { "matcher": { "id": "byName", "options": "plon GUS" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#E6862E" } } ] } ] }
+    },
+    {
+      "id": 4, "type": "table", "title": "$crop, $year: województwa",
+      "description": "Udział powiatów „gorzej niż zwykle” (B1), odchylenie NDVI i plon GUS względem normy z 15 poprzednich lat.",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT voiv_name AS `województwo`, round(worse_share_pct) AS `powiaty gorzej [%]`, round(ndvi_v_vi_anom_pct, 1) AS `NDVI V–VI [% normy]`, round(ndvi_season_anom_pct, 1) AS `NDVI IV–IX [% normy]`, round(yield_dt_ha, 1) AS `plon [dt/ha]`, round(yield_norm, 1) AS `norma [dt/ha]`, round(yield_anom_pct, 1) AS `plon [% normy]`, if(sign(ndvi_v_vi_anom_pct) = sign(yield_anom_pct), 'tak', 'nie') AS `zgodny kierunek` FROM rbd.validation_gus WHERE crop = ${crop:singlequote} AND year = ${year:raw} ORDER BY yield_anom_pct" } ],
+      "options": { "showHeader": true, "cellHeight": "sm" },
+      "fieldConfig": { "defaults": {}, "overrides": [
+        { "matcher": { "id": "byRegexp", "options": ".*% normy.*" },
+          "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "#D7301F", "value": null }, { "color": "#777777", "value": -2 }, { "color": "#2C6FBB", "value": 2 } ] } } ] },
+        { "matcher": { "id": "byName", "options": "zgodny kierunek" },
+          "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+            { "id": "mappings", "value": [ { "type": "value", "options": { "tak": { "color": "green", "index": 0 }, "nie": { "color": "orange", "index": 1 } } } ] } ] } ] }
+    }
+  ]
+}

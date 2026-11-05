@@ -1,0 +1,35 @@
+# Raporter biuletynów B1/B2: po jednej kopii na każdej maszynie z Bielikiem (etykieta bielik=true).
+#
+# Każdy raporter łączy się z lokalnym Bielikiem (127.0.0.1:11434), czyta zlecenia z Kafki (grupa konsumentów —
+# zlecenia dzielą się między raporterów), zapisuje PDF na HDFS i wynik w ClickHouse, wysyła bulletin.ready.
+# Hasło ClickHouse z .env na masterze (nie w repo).
+#
+# Wdrożenie (na masterze):
+#   set -a; . ~/rbd-build/clickhouse/.env; set +a
+#   docker stack deploy -c stack.yml --resolve-image never rbd-reporter
+# Logi: docker service logs -f rbd-reporter_reporter
+
+services:
+  reporter:
+    image: rbd-reporter:0.1
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      RBD_CLICKHOUSE_URL: http://10.7.11.21:8123
+      RBD_WEBHDFS_URL: http://10.7.11.21:9870
+      RBD_HDFS_HOST_MAP: Bigdata-wn212-02=10.7.11.22,Bigdata-wn212-03=10.7.11.23,Bigdata-wn212-04=10.7.11.24,Bigdata-wn212-05=10.7.11.25
+      RBD_KAFKA_BOOTSTRAP: 10.7.11.22:9092,10.7.11.23:9092,10.7.11.24:9092
+      RBD_OLLAMA_URL: http://127.0.0.1:11434
+      RBD_BIELIK_MODEL: hf.co/speakleash/Bielik-11B-v3.0-Instruct-GGUF:Q4_K_M
+    networks: [hostnet]
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.labels.bielik == true]
+      restart_policy:
+        condition: any
+        delay: 15s
+
+networks:
+  hostnet:
+    external: true
+    name: host

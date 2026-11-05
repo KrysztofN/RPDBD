@@ -1,0 +1,48 @@
+# ClickHouse: baza na wyniki obliczeń (B1, B2, później alerty S1/S2/D), z której czyta Grafana.
+#
+# Po co: HDFS trzyma duże pliki, ale nie odpowiada szybko na pytania („powiaty poniżej normy w czerwcu 2018”).
+# Wyniki ze Sparka zapisujemy tu, a Grafana pyta ClickHouse.
+# Jedna usługa przypięta do mastera (tam są dane — wolumen lokalny), sieć „host”.
+# Porty: 8123 HTTP (Grafana, Python), 9001 natywny (domyślny 9000 zajmuje HDFS — patrz ports.xml).
+# Wersja: 26.8 = linia LTS (długie wsparcie).
+#
+# Wdrożenie (na masterze, w katalogu z tym plikiem i plikiem .env z hasłem — .env NIE trafia do repo):
+#   set -a; . ./.env; set +a
+#   docker stack deploy -c stack.yml rbd-clickhouse
+# Test:  curl -u rbd:$CLICKHOUSE_PASSWORD 'http://10.7.11.21:8123/?query=SELECT+version()'
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8
+    environment:
+      CLICKHOUSE_DB: rbd
+      CLICKHOUSE_USER: rbd
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}       # z .env; pustego hasła pilnuje skrypt wdrożenia
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    configs:
+      - source: clickhouse-ports
+        target: /etc/clickhouse-server/config.d/ports.xml
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks: [hostnet]
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: any
+
+configs:
+  clickhouse-ports:
+    file: ./ports.xml
+
+volumes:
+  clickhouse-data:
+
+networks:
+  hostnet:
+    external: true
+    name: host

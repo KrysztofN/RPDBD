@@ -1,0 +1,74 @@
+{
+  "uid": "rbd-bulletins",
+  "title": "Biuletyny B1/B2 — raportery i Bielik",
+  "description": "Biuletyny zrobione przez raportery (Kafka -> Bielik -> PDF). Źródło: ClickHouse rbd.bulletins.",
+  "tags": ["rbd", "b1", "b2", "bielik"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 41,
+  "time": { "from": "now-30d", "to": "now" },
+  "refresh": "30s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Biuletyny (ostatnie 30 dni)",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT countIf(status = 'ok') AS gotowe, countIf(status != 'ok') AS bledy FROM rbd.bulletins WHERE created >= now() - INTERVAL 30 DAY" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/.*/", "values": false },
+                   "textMode": "value_and_name", "colorMode": "value", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } },
+        "overrides": [ { "matcher": { "id": "byName", "options": "bledy" },
+          "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } },
+                          { "id": "displayName", "value": "błędy" } ] } ] }
+    },
+    {
+      "id": 2, "type": "stat", "title": "Komentarz Bielika przyjęty",
+      "description": "Udział biuletynów, w których odpowiedź Bielika przeszła sprawdzenie (format, liczby, lista przyczyn). Reszta ma teksty z reguł.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT round(100 * avg(ai_used), 0) AS proc FROM rbd.bulletins WHERE status = 'ok' AND created >= now() - INTERVAL 30 DAY" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 50 }, { "color": "green", "value": 80 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Średni czas biuletynu",
+      "description": "Od odebrania zlecenia z Kafki do zapisania PDF (większość to praca Bielika na CPU).",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT round(avg(duration_s)) AS sekundy FROM rbd.bulletins WHERE status = 'ok' AND created >= now() - INTERVAL 30 DAY" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "none", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 4, "type": "piechart", "title": "Przyczyny wg Bielika",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT cause AS przyczyna, count() AS n FROM rbd.bulletins WHERE status = 'ok' AND created >= now() - INTERVAL 30 DAY GROUP BY cause ORDER BY n DESC" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": true },
+                   "legend": { "displayMode": "list", "placement": "right" }, "pieType": "donut" },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 5, "type": "table", "title": "Lista biuletynów",
+      "description": "Każdy wiersz = jeden PDF na HDFS (ścieżka). raporter = maszyna z Bielikiem, która go zrobiła.",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 5 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse-rbd" },
+      "targets": [ { "refId": "A", "editorType": "sql", "format": 1, "queryType": "table",
+        "rawSql": "SELECT created AS utworzono, county_name AS powiat, period_label AS termin, status, if(ai_used = 1, 'Bielik', 'reguły') AS komentarz, cause AS przyczyna, round(duration_s) AS czas_s, reporter_host AS raporter, pdf_path AS pdf FROM rbd.bulletins ORDER BY created DESC LIMIT 200" } ],
+      "options": { "showHeader": true, "cellHeight": "sm", "sortBy": [ { "displayName": "utworzono", "desc": true } ] },
+      "fieldConfig": { "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "status" },
+            "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+                            { "id": "mappings", "value": [ { "type": "value", "options": { "ok": { "color": "green", "index": 0 }, "błąd": { "color": "red", "index": 1 } } } ] } ] },
+          { "matcher": { "id": "byName", "options": "czas_s" }, "properties": [ { "id": "unit", "value": "s" } ] }
+        ] }
+    }
+  ]
+}

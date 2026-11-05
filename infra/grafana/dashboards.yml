@@ -1,0 +1,11 @@
+# Dashboardy Grafany z plików (provisioning): Grafana wczytuje *.json z katalogu i odświeża co 30 s.
+# Katalog infra/grafana/dashboards/ z kodu na klastrze jest montowany do kontenera (stack.yml).
+apiVersion: 1
+providers:
+  - name: rbd
+    folder: RBD
+    type: file
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
