@@ -1,0 +1,6 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: s12-sinks
+    static_configs:
+      - targets: ['10.7.11.23:9212', '10.7.11.24:9212', '10.7.11.25:9212']

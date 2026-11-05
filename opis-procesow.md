@@ -4,7 +4,7 @@
 
 ## 1. Co to jest
 
-Oba procesy z godzinowej pogody z przeszłości (odtwarzanej replayem do Kafki jak strumień na żywo) liczą **dla każdego powiatu, codziennie, czy uprawy są zagrożone**. Wynik: kolor na mapie (zielony / żółty / czerwony) + e-mail przy alarmie. Różnią się zagrożeniem.
+Oba procesy z godzinowej pogody z przeszłości (odtwarzanej replayem do Kafki jak strumień na żywo) liczą **dla każdego powiatu, codziennie, czy uprawy są zagrożone**. Wynik: kolor na mapie (zielony / żółty / czerwony) + telegram przy alarmie. Różnią się zagrożeniem.
 
 ### S1. Susza — czy polom brakuje wody
 
@@ -69,7 +69,7 @@ Każda technologia musi odpowiadać na pytanie „po co?”.
 | Monitoring | **Prometheus + cAdvisor + kafka-exporter** | opóźnienie konsumenta (lag), obciążenie |
 | Logi | **Loki** | logi kontenerów w Grafanie |
 | Wizualizacja | **Grafana** (mapa + alerting); opcjonalnie **Superset** | mapa powiatów, drugi BI do raportu |
-| Powiadomienia | **n8n** | alarm → Bielik → e-mail, przepływ do pokazania |
+| Powiadomienia | **n8n** | alarm → Bielik → telegram, przepływ do pokazania |
 | CI/CD | **GitHub Actions + pytest + Testcontainers** | test z prawdziwą Kafką („80 dni bez deszczu → alarm”) |
 | Wdrożenie | **Docker Swarm** (+ Portainer) | już jest |
 
@@ -79,11 +79,11 @@ Każda technologia musi odpowiadać na pytanie „po co?”.
 
 Zasada: **model tylko opisuje, nic nie liczy.** API: `AI/api.py` (`POST /chat`), Bielik 11B przez Ollamę.
 
-1. **Komunikat przy alarmie S1/S2 (na bieżąco):** n8n / Grafana Alerting wysyła JSON z liczbami, np. `{powiat, bilans_mm, wilgotnosc_vs_norma, dni_bez_deszczu}` albo `{powiat, min_temp, godziny_przymrozku, uprawa}` → 3–4 zdania po polsku do e-maila.
+1. **Komunikat przy alarmie S1/S2 (na bieżąco):** n8n / Grafana Alerting wysyła JSON z liczbami, np. `{powiat, bilans_mm, wilgotnosc_vs_norma, dni_bez_deszczu}` albo `{powiat, min_temp, godziny_przymrozku, uprawa}` → 3–4 zdania po polsku do telegramu.
 2. **Wspólny raport co 16 dni (rytm MODIS MOD13Q1):** DAG w Airflow:
    - z ClickHouse wyniki S1, S2, B1, B2 za okres, złączone po kodzie TERYT,
    - JSON → Bielik pisze sekcje: „Susza”, „Przymrozki”, „Stan roślinności (NDVI)”, „Fenologia / plony” + podsumowanie łączące sygnały (np. alarm suszy S1 zgodny ze spadkiem NDVI z B1),
-   - Markdown → PDF (Quarto / WeasyPrint) → e-mail / folder.
+   - Markdown → PDF (Quarto / WeasyPrint) → telegram raport.
 3. **Zabezpieczenie:** liczby wstawiamy z bazy w szablonie albo po generacji skrypt sprawdza, czy każda liczba w tekście występuje w JSON-ie — model nie może zmyślić danych.
 
 ## 5. Do ustalenia z zespołem B

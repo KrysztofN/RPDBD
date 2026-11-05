@@ -1,0 +1,13 @@
+{
+  "rule_version": "s1s2-v1",
+  "baseline_start": 2012,
+  "baseline_end": 2017,
+  "min_baseline_days": 30,
+  "min_points": 3,
+  "min_coverage": 0.8,
+  "warning_share": 0.3,
+  "alarm_share": 0.5,
+  "watermark_hours": 3,
+  "s1": {"window_days": 60, "warning_kbw_mm": -100, "alarm_kbw_mm": -150, "season_start": "03-21", "season_end": "09-30"},
+  "s2": {"temperature_correction": -1.6, "warning_hours": 1, "alarm_hours": 3, "months": [4, 5, 6], "thresholds": {"rzepak_zboza_jare": -4, "kukurydza_ziemniaki": 0}}
+}

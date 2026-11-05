@@ -1,0 +1,65 @@
+# Additive overlay: does not replace s1/s2 or running replay.
+# Run with: docker compose -f compose.yaml -f compose.incidents.yaml up -d s1-kbw s1s2-incidents
+x-incident-common: &incident_common
+  image: rbd-streaming:0.2
+  network_mode: host
+  extra_hosts:
+    - 'bigdata-wn212-02:10.7.11.22'
+    - 'bigdata-wn212-03:10.7.11.23'
+    - 'bigdata-wn212-04:10.7.11.24'
+    - 'bigdata-wn212-05:10.7.11.25'
+  volumes:
+    - .:/app:ro
+    - ../reporter-build:/project:ro
+  working_dir: /app
+  environment:
+    PYTHONPATH: /app:/project
+    HOME: /tmp
+    HADOOP_USER_NAME: hadoop
+    CHECKPOINT_ROOT: ${CHECKPOINT_ROOT:-/rbd/checkpoints/s1s2_v4_clean}
+    KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-10.7.11.22:9092,10.7.11.23:9092,10.7.11.24:9092}
+    CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-10.7.11.21}
+    CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+    CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rbd}
+    CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-rbd}
+    S1_DAILY_TOPIC: ${S1_DAILY_TOPIC:-s1.daily.metrics.v1}
+    INCIDENTS_INPUT_TOPIC: ${INCIDENTS_INPUT_TOPIC:-alerts.detected}
+    INCIDENTS_OUTPUT_TOPIC: ${INCIDENTS_OUTPUT_TOPIC:-s1s2.incidents.v1}
+    INCIDENTS_START_OFFSETS: ${INCIDENTS_START_OFFSETS:-earliest}
+    INCIDENTS_HISTORY_ENABLED: ${INCIDENTS_HISTORY_ENABLED:-1}
+    INCIDENTS_SIMULATION: ${INCIDENTS_SIMULATION:-1}
+
+services:
+  s1-kbw:
+    <<: *incident_common
+    restart: unless-stopped
+    command: >-
+      /opt/spark/bin/spark-submit
+      --master spark://10.7.11.21:7077
+      --conf spark.driver.host=10.7.11.24
+      --conf spark.driver.bindAddress=0.0.0.0
+      --conf spark.jars.ivy=/opt/ivy
+      --conf spark.executor.cores=1
+      --conf spark.cores.max=2
+      --conf spark.executor.memory=2g
+      --conf spark.driver.memory=2g
+      --conf spark.executorEnv.HADOOP_USER_NAME=hadoop
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.4
+      /app/s1_kbw_state.py
+  s1s2-incidents:
+    <<: *incident_common
+    restart: unless-stopped
+    command: >-
+      /opt/spark/bin/spark-submit
+      --master spark://10.7.11.21:7077
+      --conf spark.driver.host=10.7.11.24
+      --conf spark.driver.bindAddress=0.0.0.0
+      --conf spark.jars.ivy=/opt/ivy
+      --conf spark.executor.cores=1
+      --conf spark.cores.max=2
+      --conf spark.executor.memory=2g
+      --conf spark.driver.memory=2g
+      --conf spark.executorEnv.HADOOP_USER_NAME=hadoop
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.4
+      /app/spark_incidents.py

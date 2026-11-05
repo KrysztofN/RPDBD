@@ -1,0 +1,35 @@
+x-app: &app
+  image: s12-python:0.1
+  networks: [hostnet]
+  environment:
+    S12_RUN: ${S12_RUN:-demo2018}
+    S12_CASSANDRA: 10.7.11.23,10.7.11.24,10.7.11.25
+  volumes:
+    - ${S12_DEPLOY_DIR:-/opt/s12}/local:/app/S1_S2/local:ro
+  deploy:
+    mode: global
+    placement: {constraints: [node.labels.s12 == true]}
+    resources: {limits: {memory: 512M, cpus: '0.5'}}
+services:
+  sink:
+    <<: *app
+    command: [python3, -m, S1_S2.services, sink]
+  api:
+    <<: *app
+    command: [python3, -m, S1_S2.services, api]
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    networks: [hostnet]
+    command: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.path=/prometheus, --storage.tsdb.retention.time=7d, --web.listen-address=:9213]
+    configs: [{source: prometheus-config, target: /etc/prometheus/prometheus.yml}]
+    volumes: [s12-prometheus:/prometheus]
+    deploy:
+      mode: global
+      placement: {constraints: [node.labels.s12 == true]}
+      resources: {limits: {memory: 512M, cpus: '0.5'}}
+configs:
+  prometheus-config: {file: ./prometheus.yml}
+volumes:
+  s12-prometheus:
+networks:
+  hostnet: {external: true, name: host}

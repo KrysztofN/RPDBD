@@ -1,0 +1,78 @@
+# Launch on Bigdata-wn212-04 only (Spark driver host below is 10.7.11.24).
+# Existing Spark master/workers, Kafka and HDFS are NOT created by this file.
+x-common: &common
+  image: rbd-streaming:0.2
+  build: .
+  network_mode: host
+  extra_hosts:
+  - "bigdata-wn212-02:10.7.11.22"
+  - "bigdata-wn212-03:10.7.11.23"
+  - "bigdata-wn212-04:10.7.11.24"
+  - "bigdata-wn212-05:10.7.11.25"
+  volumes:
+    - .:/app:ro
+    - ../reporter-build:/project:ro
+  working_dir: /app
+  environment:
+    PYTHONPATH: /app:/project
+    HOME: /tmp
+    HADOOP_USER_NAME: hadoop
+    USER: hadoop
+    LOGNAME: hadoop
+    CHECKPOINT_ROOT: ${CHECKPOINT_ROOT:-/rbd/checkpoints/s1s2_v3}
+    KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-10.7.11.22:9092,10.7.11.23:9092,10.7.11.24:9092}
+    WEATHER_TOPIC: ${WEATHER_TOPIC:-weather.hourly.v3}
+    CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-10.7.11.21}
+    CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+    CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+    CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-rbd}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_PROXY: ${TELEGRAM_PROXY:-}
+
+x-spark-args: &spark-command
+  # not a service, reused below via YAML anchor on full command only
+  command: /bin/true
+
+services:
+  init:
+    <<: *common
+    command: python3 make_grid_map.py
+  replay:
+    <<: *common
+    command: python3 era5_replay.py --start 2018-04-01T00:00 --end 2018-04-03T23:00
+  s1:
+    <<: *common
+    command: >-
+      /opt/spark/bin/spark-submit
+      --master spark://10.7.11.21:7077
+      --conf spark.driver.host=10.7.11.24
+      --conf spark.driver.bindAddress=0.0.0.0
+      --conf spark.jars.ivy=/opt/ivy
+      --conf spark.executor.cores=2
+      --conf spark.cores.max=4
+      --conf spark.executor.memory=3g
+      --conf spark.driver.memory=2g
+      --conf spark.executorEnv.HADOOP_USER_NAME=hadoop
+      --conf spark.hadoop.dfs.replication=2
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.4
+      /app/s1_stream.py
+  s2:
+    <<: *common
+    command: >-
+      /opt/spark/bin/spark-submit
+      --master spark://10.7.11.21:7077
+      --conf spark.driver.host=10.7.11.24
+      --conf spark.driver.bindAddress=0.0.0.0
+      --conf spark.jars.ivy=/opt/ivy
+      --conf spark.executor.cores=2
+      --conf spark.cores.max=4
+      --conf spark.executor.memory=3g
+      --conf spark.driver.memory=2g
+      --conf spark.executorEnv.HADOOP_USER_NAME=hadoop
+      --conf spark.hadoop.dfs.replication=2
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.4
+      /app/s2_stream.py
+  alert-preview:
+    <<: *common
+    command: python3 alert_telegram.py

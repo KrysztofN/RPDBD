@@ -1,0 +1,96 @@
+# Run on Swarm manager. All services on worker2–4; separate ports/volumes/images.
+x-cassandra: &cassandra
+  image: cassandra:4.1.7
+  networks: [hostnet]
+  volumes: [s12-cassandra:/var/lib/cassandra]
+x-cass-env: &cass-env
+  CASSANDRA_CLUSTER_NAME: s12
+  CASSANDRA_SEEDS: 10.7.11.23,10.7.11.24,10.7.11.25
+  CASSANDRA_DC: dc1
+  CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+  CASSANDRA_RPC_ADDRESS: 0.0.0.0
+  MAX_HEAP_SIZE: 2G
+  HEAP_NEWSIZE: 400M
+x-zk: &zk
+  image: zookeeper:3.9.3
+  networks: [hostnet]
+  volumes: [s12-zk-data:/data, s12-zk-log:/datalog]
+x-zk-env: &zk-env
+  ZOO_CLIENT_PORT: "2182"
+  ZOO_SERVERS: server.1=10.7.11.23:2889:3889;2182 server.2=10.7.11.24:2889:3889;2182 server.3=10.7.11.25:2889:3889;2182
+  JVMFLAGS: -Xmx256m
+x-master: &master
+  image: s12-python:0.1
+  networks: [hostnet]
+  environment:
+    SPARK_DAEMON_JAVA_OPTS: -Dspark.deploy.recoveryMode=ZOOKEEPER -Dspark.deploy.zookeeper.url=10.7.11.23:2182,10.7.11.24:2182,10.7.11.25:2182 -Dspark.deploy.zookeeper.dir=/s12-spark
+
+services:
+  cassandra-1:
+    <<: *cassandra
+    environment:
+      <<: *cass-env
+      CASSANDRA_LISTEN_ADDRESS: 10.7.11.23
+      CASSANDRA_BROADCAST_RPC_ADDRESS: 10.7.11.23
+      CASSANDRA_RACK: rack1
+    deploy:
+      placement: {constraints: [node.hostname == Bigdata-wn212-03]}
+      resources: {limits: {memory: 4G, cpus: '1'}}
+  cassandra-2:
+    <<: *cassandra
+    environment:
+      <<: *cass-env
+      CASSANDRA_LISTEN_ADDRESS: 10.7.11.24
+      CASSANDRA_BROADCAST_RPC_ADDRESS: 10.7.11.24
+      CASSANDRA_RACK: rack2
+    deploy:
+      placement: {constraints: [node.hostname == Bigdata-wn212-04]}
+      resources: {limits: {memory: 4G, cpus: '1'}}
+  cassandra-3:
+    <<: *cassandra
+    environment:
+      <<: *cass-env
+      CASSANDRA_LISTEN_ADDRESS: 10.7.11.25
+      CASSANDRA_BROADCAST_RPC_ADDRESS: 10.7.11.25
+      CASSANDRA_RACK: rack3
+    deploy:
+      placement: {constraints: [node.hostname == Bigdata-wn212-05]}
+      resources: {limits: {memory: 4G, cpus: '1'}}
+  zk-1:
+    <<: *zk
+    environment: {<<: *zk-env, ZOO_MY_ID: '1'}
+    deploy: {placement: {constraints: [node.hostname == Bigdata-wn212-03]}}
+  zk-2:
+    <<: *zk
+    environment: {<<: *zk-env, ZOO_MY_ID: '2'}
+    deploy: {placement: {constraints: [node.hostname == Bigdata-wn212-04]}}
+  zk-3:
+    <<: *zk
+    environment: {<<: *zk-env, ZOO_MY_ID: '3'}
+    deploy: {placement: {constraints: [node.hostname == Bigdata-wn212-05]}}
+  spark-master-1:
+    <<: *master
+    command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.master.Master, --host, 10.7.11.23, --port, '7177', --webui-port, '8180']
+    deploy: {placement: {constraints: [node.hostname == Bigdata-wn212-03]}}
+  spark-master-2:
+    <<: *master
+    command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.master.Master, --host, 10.7.11.24, --port, '7177', --webui-port, '8180']
+    deploy: {placement: {constraints: [node.hostname == Bigdata-wn212-04]}}
+  spark-master-3:
+    <<: *master
+    command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.master.Master, --host, 10.7.11.25, --port, '7177', --webui-port, '8180']
+    deploy: {placement: {constraints: [node.hostname == Bigdata-wn212-05]}}
+  spark-worker:
+    image: s12-python:0.1
+    networks: [hostnet]
+    command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.worker.Worker, 'spark://10.7.11.23:7177,10.7.11.24:7177,10.7.11.25:7177', --cores, '2', --memory, 4g, --webui-port, '8181']
+    deploy:
+      mode: global
+      placement: {constraints: [node.labels.s12 == true]}
+      resources: {limits: {memory: 6G, cpus: '2'}}
+volumes:
+  s12-cassandra:
+  s12-zk-data:
+  s12-zk-log:
+networks:
+  hostnet: {external: true, name: host}

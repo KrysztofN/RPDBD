@@ -50,6 +50,7 @@ log = get_logger(Path(__file__).stem)
 
 BOOTSTRAP = os.environ.get("RBD_KAFKA_BOOTSTRAP", "10.7.11.22:9092,10.7.11.23:9092,10.7.11.24:9092")
 TOPIC_READY, GROUP = "bulletin.ready", "bulletin-telegram"
+S2_TEST_TOPIC = "s1s2.incidents.test"
 API = "https://api.telegram.org/bot{token}/{method}"
 PAUSE_S = 0.2                                  # Telegram: do ~30 wiadomości/s, my wysyłamy dużo wolniej
 
@@ -522,12 +523,78 @@ class Bot:
         return sent
 
 
+
+def send_s2_test_incident(bot: Bot, event: dict) -> None:
+    """Historical S2 test event to one explicitly allowed chat only.
+
+    Uses the existing bot token/proxy and never calls getUpdates.
+    A success log suppresses duplicate Kafka redelivery; like other Bot API
+    sends this is at-least-once if the process crashes between send and log.
+    """
+    import hashlib
+
+    if os.environ.get("S1S2_TEST_ALERTS_ENABLED", "0") != "1":
+        log.info("S2 test event ignored: test delivery disabled")
+        return
+    raw_chat = os.environ.get("S1S2_TEST_CHAT_ID", "").strip()
+    if not re.fullmatch(r"-?\d+", raw_chat):
+        raise ValueError("Set S1S2_TEST_CHAT_ID in master telegram/.env")
+    chat_id = int(raw_chat)
+    if event.get("source") != "S2" or event.get("historical") is not True:
+        raise ValueError("Only explicit historical S2 events are accepted")
+    rid = str(event.get("region_id", ""))
+    if not re.fullmatch(r"\d{4}", rid):
+        raise ValueError("Invalid region_id")
+    eid = str(event.get("event_id", ""))
+    if not re.fullmatch(r"[a-f0-9]{24}", eid):
+        raise ValueError("Invalid event_id")
+    if not str(event.get("start", "")).startswith("2018-"):
+        raise ValueError("Refusing non-2018 test event")
+    if int(event.get("hours", 0)) < 2:
+        raise ValueError("Only incidents >= 2h accepted")
+
+    ddl = """CREATE TABLE IF NOT EXISTS rbd.tg_s1s2_test_log (
+        event_id String, chat_id Int64, region_id String,
+        status LowCardinality(String), sent DateTime
+    ) ENGINE = MergeTree ORDER BY (event_id, chat_id, sent)"""
+    bot.ch.command(ddl)
+    safe_eid = sql_str(eid)
+    seen = bot.ch.query_df(
+        f"SELECT count() AS n FROM rbd.tg_s1s2_test_log "
+        f"WHERE event_id={safe_eid} AND chat_id={chat_id} AND status='ok'")
+    if int(seen.iloc[0]["n"]) > 0:
+        log.info("S2 historical test event %s already delivered to allowed chat", eid)
+        return
+    crop = {"kukurydza_ziemniaki":"kukurydza i ziemniaki",
+            "rzepak_zboza_jare":"rzepak i zboża jare"}.get(
+                str(event.get("crop_group", "")), str(event.get("crop_group", "")))
+    msg = ("<b>SYMULACJA 2018 — incydent przymrozkowy S2</b>\n"
+           f"Powiat TERYT: <code>{escape(rid)}</code>\n"
+           f"Uprawy: {escape(crop)}\n"
+           f"Od: {escape(str(event['start']))}\n"
+           f"Do: {escape(str(event['end']))}\n"
+           f"Czas zagrożenia: {int(event['hours'])} h\n"
+           f"Minimum szacowane przy gruncie: {float(event['minimum']):.1f} °C\n"
+           f"Próg umowny: {float(event['threshold']):.1f} °C\n"
+           "<i>Dane historyczne ERA5-Land; wskaźnik modelowy, nie prognoza szkód.</i>")
+    bot.tg.send_text(chat_id, msg)
+    import pandas as pd
+    bot.ch.insert_df("tg_s1s2_test_log", pd.DataFrame([{
+        "event_id":eid,"chat_id":chat_id,"region_id":rid,"status":"ok",
+        "sent":datetime.now().replace(microsecond=0)
+    }]))
+    log.info("S2 test incident %s delivered to configured test chat", eid)
+
+
 def run_service(bot: Bot) -> None:
     from confluent_kafka import Consumer
 
     consumer = Consumer({"bootstrap.servers": BOOTSTRAP, "group.id": GROUP, "enable.auto.commit": False,
                          "auto.offset.reset": "latest", "max.poll.interval.ms": 1_800_000})
-    consumer.subscribe([TOPIC_READY])
+    topics = [TOPIC_READY]
+    if os.environ.get("S1S2_TEST_ALERTS_ENABLED", "0") == "1":
+        topics.append(S2_TEST_TOPIC)
+    consumer.subscribe(topics)
     offset = None
     me = bot.tg.call("getMe")
     bot.tg.call("setMyCommands", commands=json.dumps([{"command": c, "description": d} for c, d in COMMANDS],
@@ -556,6 +623,17 @@ def run_service(bot: Bot) -> None:
                 continue
             if msg.error():
                 log.warning("Kafka: %s", msg.error())
+                continue
+            if msg.topic() == S2_TEST_TOPIC:
+                try:
+                    send_s2_test_incident(bot, json.loads(msg.value()))
+                except (RuntimeError, requests.RequestException, OSError) as e:
+                    log.error("S2 test delivery failed: %s", type(e).__name__)
+                    time.sleep(10)
+                    continue  # no offset commit, retry after recovery
+                except (ValueError, KeyError, TypeError) as e:
+                    log.error("Invalid S2 test event skipped: %s", type(e).__name__)
+                consumer.commit(msg, asynchronous=False)
                 continue
             b = json.loads(msg.value())
             if b.get("status") == "ok":

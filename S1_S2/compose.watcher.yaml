@@ -1,0 +1,26 @@
+services:
+  s2-watcher:
+    image: rbd-streaming:0.2
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - .:/app:ro
+      - ./state:/state
+    environment:
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-10.7.11.21}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-rbd}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-rbd}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-10.7.11.22:9092,10.7.11.23:9092,10.7.11.24:9092}
+      S2_AUTOPUBLISH: ${S2_AUTOPUBLISH:-0}
+    command: >-
+      python3 -u /app/s2_incident_watcher.py
+      --start 2018-04-01T00:00:00Z
+      --end 2018-04-08T00:00:00Z
+      --regions 0206
+      --min-hours 2
+      --grace-hours 3
+      --max-publish 1
+      --interval 60
+    restart: unless-stopped

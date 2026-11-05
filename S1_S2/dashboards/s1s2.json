@@ -1,0 +1,165 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "title": "RBD | S1 - S2 | Woda i przymrozki",
+  "uid": "rbd-s1s2",
+  "tags": [
+    "rbd",
+    "ERA5-Land",
+    "S1",
+    "S2"
+  ],
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "2018-04-01T00:00:00Z",
+    "to": "2018-09-30T23:59:59Z"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "region_id",
+        "type": "textbox",
+        "label": "Powiat (TERYT)",
+        "query": "3011",
+        "current": {
+          "text": "3011",
+          "value": "3011"
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "S1: Bilans wodny 60 dni (mm)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 16,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "REPLACE_WITH_CLICKHOUSE_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "SELECT toDateTime(day) AS time, kbw_60d_mm AS value FROM rbd.s1_balance FINAL WHERE region_id = '${region_id}' AND days_60d=60 ORDER BY day"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:mm",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": -150
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "S1: Alerty niedoboru wody (dni)",
+      "type": "stat",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "REPLACE_WITH_CLICKHOUSE_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "SELECT countIf(alert=1) AS alert_days FROM rbd.s1_balance FINAL WHERE region_id = '${region_id}'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "S2: Minimalna oszacowana temperatura przy gruncie (°C)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 16,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "REPLACE_WITH_CLICKHOUSE_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "SELECT event_hour AS time, min(min_ground_est_c) AS value FROM rbd.s2_hourly WHERE region_id = '${region_id}' GROUP BY event_hour ORDER BY event_hour"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "S2: Liczba godzin z alertami dla grup upraw",
+      "type": "table",
+      "gridPos": {
+        "x": 16,
+        "y": 9,
+        "w": 8,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "REPLACE_WITH_CLICKHOUSE_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "queryType": "sql",
+          "rawSql": "SELECT crop_group, count() AS alert_hours, min(min_ground_est_c) AS min_temp_c FROM rbd.s2_frost_alerts WHERE region_id = '${region_id}' GROUP BY crop_group ORDER BY crop_group"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    }
+  ]
+}

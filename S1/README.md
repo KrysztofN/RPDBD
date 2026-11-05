@@ -3,7 +3,7 @@
 ## Co robi
 
 W sezonie (21.03–30.09) codziennie sprawdza dla każdego powiatu, czy polom brakuje wody.
-Wynik: mapa powiatów — zielony (OK), żółty (ostrzeżenie), czerwony (alarm) — i e-mail przy alarmie.
+Wynik: mapa powiatów — zielony (OK), żółty (ostrzeżenie), czerwony (alarm) — i telegram przy alarmie.
 
 Brak wody poznajemy po dwóch sygnałach:
 1. **Bilans wody z 60 dni** = suma opadu − suma parowania. Mocno ujemny = przez 2 miesiące więcej wyparowało, niż spadło.
@@ -40,7 +40,7 @@ Brak wody poznajemy po dwóch sygnałach:
    - dobre → sumy z 60 dni na punkt → stan punktu → stan powiatu.
    - Replay celowo psuje ~0,1% wiadomości (ERA5-Land jest prawie bez błędów), żeby pokazać, że walidacja działa.
    - Wynik musi być taki sam jak w prototypie (kroku 5).
-7. **Wyniki** → ClickHouse → mapa w Grafanie, e-mail przy alarmie.
+7. **Wyniki** → ClickHouse → mapa w Grafanie, telegram przy alarmie.
 
 ## Reguły (wszystkie w konfiguracji)
 
@@ -63,7 +63,7 @@ Brak wody poznajemy po dwóch sygnałach:
 - Spark na 4 workerach. W strumieniu dzielą się **punktami**, nie czasem — jak 4 100 stacji, każdy worker obsługuje swoją grupę; czas płynie po kolei.
 - Na demo: wyłączenie maszyny → system działa dalej; przyspieszenie replayu → dokładamy workery.
 
-**Narzędzia:** Airflow (kroki 3–4 po kolei), Kafka UI (podgląd kolejki), Prometheus + cAdvisor (obciążenie), GitHub Actions (testy na małej próbce), lokalny model AI w Ollamie (treść e-maila z liczb).
+**Narzędzia:** Airflow (kroki 3–4 po kolei), Kafka UI (podgląd kolejki), Prometheus + cAdvisor (obciążenie), GitHub Actions (testy na małej próbce), lokalny model AI w Ollamie (treść telegram z liczb).
 
 ## Stan
 

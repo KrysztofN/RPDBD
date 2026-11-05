@@ -1,0 +1,17 @@
+services:
+  sender:
+    image: s12-python:0.1
+    command: [python3, -m, S1_S2.services, telegram]
+    networks: [hostnet]
+    secrets: [s12_telegram_token]
+    environment:
+      S12_RUN: ${S12_RUN:-demo2018}
+      S12_TELEGRAM_PROXY: ${S12_TELEGRAM_PROXY:-}
+    deploy:
+      mode: global
+      placement: {constraints: [node.labels.s12 == true]}
+      resources: {limits: {memory: 512M, cpus: '0.25'}}
+secrets:
+  s12_telegram_token: {external: true}
+networks:
+  hostnet: {external: true, name: host}
