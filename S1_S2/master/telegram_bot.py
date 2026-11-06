@@ -443,7 +443,8 @@ class Bot:
             self.set_scope(chat_id, name, scope, 1)
             self.tg.send_text(chat_id, "<b>Zapisano subskrypcję</b>\n\n"
                                        f"• Zakres: {escape(self.scope_label(scope))}\n"
-                                       "• Nowe biuletyny PDF przyjdą tutaj automatycznie, co 16 dni (IV–IX)\n\n"
+                                       "• Biuletyny PDF przyjdą automatycznie, co 16 dni (IV–IX)\n"
+                                       "• Dla /powiat: powiadomienia o nowych zagrożeniach S1/S2\n\n"
                                        "<i>Ostatni gotowy biuletyn: /ostatni · wszystkie subskrypcje: /moje</i>")
         elif cmd == "/moje":
             subs = self.subscriptions(chat_id)
@@ -589,12 +590,19 @@ def send_s2_test_incident(bot: Bot, event: dict) -> None:
 
 
 def send_county_incident(bot: Bot, event: dict) -> None:
-    # Only county subscriptions; best-effort durable idempotency.
+    """Deliver OPEN once per incident and per active /powiat subscription.
+
+    UPDATE and CLOSED are consumed but not sent to Telegram. B1/B2 unchanged.
+    """
     if os.environ.get('S1S2_INCIDENTS_ENABLED', '0') != '1':
-        log.info('Incident ignored (disabled)')
         return
-    if event.get('state') != 'closed' or event.get('source') not in ('S1','S2'):
-        raise ValueError('Unexpected incident type/state')
+    if event.get('source') not in ('S1', 'S2'):
+        raise ValueError('Unexpected incident source')
+    if event.get('state') in ('update', 'closed'):
+        return
+    if event.get('state') != 'open':
+        raise ValueError('Unexpected incident state')
+
     eid = str(event.get('event_id', ''))
     rid = str(event.get('region_id', ''))
     if not re.fullmatch(r'[a-f0-9]{64}', eid) or not re.fullmatch(r'[0-9]{4}', rid):
@@ -602,68 +610,69 @@ def send_county_incident(bot: Bot, event: dict) -> None:
     source = event['source']
     duration = int(event['duration'])
     minimum = float(event['minimum'])
-    if duration < 1 or duration > 366 or abs(minimum) > 10000:
+    if duration < 1 or duration > 366 or not -10000 < minimum < 10000:
         raise ValueError('Invalid duration/minimum')
     start, end = str(event.get('start', '')), str(event.get('end', ''))
-    if not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', start):
-        raise ValueError('Invalid incident start')
-    if not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', end):
-        raise ValueError('Invalid incident end')
-    # Safety: explicit test mode restricts recipients to the one chat.
-    test_only = os.environ.get('S1S2_INCIDENTS_TEST_ONLY', '1') == '1'
-    test_chat = os.environ.get('S1S2_TEST_CHAT_ID', '')
-    if test_only and not re.fullmatch(r'-?\d+', test_chat):
-        raise ValueError('Missing S1S2_TEST_CHAT_ID; refusing send')
+    pattern = r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ'
+    if not re.fullmatch(pattern, start) or not re.fullmatch(pattern, end):
+        raise ValueError('Invalid incident timestamps')
     if bool(event.get('historical')) and os.environ.get('S1S2_ALLOW_HISTORICAL', '0') != '1':
         log.info('Historical incident %s skipped by policy', eid)
         return
 
-    # This query checks the actual /powiat subscription. No matching voiv/all scope.
     subscribers = bot.ch.query_df(
         f"SELECT DISTINCT chat_id FROM rbd.tg_subscribers FINAL "
         f"WHERE active=1 AND scope={sql_str('county:' + rid)}")
     chats = [int(row.chat_id) for row in subscribers.itertuples()]
-    if test_only:
-        chats = [cid for cid in chats if cid == int(test_chat)]
+    if os.environ.get('S1S2_INCIDENTS_TEST_ONLY', '0') == '1':
+        raw = os.environ.get('S1S2_TEST_CHAT_ID', '')
+        if not re.fullmatch(r'-?\d+', raw):
+            raise ValueError('Missing S1S2_TEST_CHAT_ID')
+        chats = [cid for cid in chats if cid == int(raw)]
     if not chats:
-        log.info('No /powiat subscribers for incident %s %s', eid, rid)
+        log.info('No /powiat subscribers for incident %s county=%s', eid, rid)
         return
+
     bot.ch.command('''CREATE TABLE IF NOT EXISTS rbd.tg_incident_delivery (
         event_id String, chat_id Int64, region_id String, source String,
         status LowCardinality(String), error String, sent DateTime('UTC')
     ) ENGINE MergeTree ORDER BY (event_id,chat_id,sent)''')
     crops = event.get('crops') or []
     if source == 'S2':
-        labels = {'kukurydza_ziemniaki':'kukurydza i ziemniaki',
-                  'rzepak_zboza_jare':'rzepak i zboża jare'}
+        labels = {'kukurydza_ziemniaki': 'kukurydza i ziemniaki',
+                  'rzepak_zboza_jare': 'rzepak i zboża jare'}
         crops_text = ', '.join(labels.get(str(x), str(x)) for x in crops) or 'brak określonej grupy'
-        headline = 'Incydent przymrozkowy S2'
+        headline = 'Początek zagrożenia przymrozkiem S2'
         metric = f'Minimum szacowane przy gruncie: {minimum:.1f} °C'
-        detail = f'Zagrożone grupy: {escape(crops_text)}\nCzas: {duration} h'
+        detail = f'Zagrożone grupy: {escape(crops_text)}'
     else:
-        headline = 'Incydent deficytu wodnego S1'
-        metric = f'Najniższy KBW 60 dni: {minimum:.1f} mm'
-        detail = f'Czas: {duration} dni (pełne okna KBW 60 dni)'
-    prefix = 'SYMULACJA HISTORYCZNA 2018 — ' if bool(event.get('historical')) else ''
+        headline = 'Początek zagrożenia niedoborem wody S1'
+        metric = f'KBW 60 dni: {minimum:.1f} mm'
+        detail = 'Wykryto pierwszy dzień zagrożenia'
+
+    prefix = 'SYMULACJA HISTORYCZNA — ' if bool(event.get('historical')) else ''
     body = (f'<b>{escape(prefix + headline)}</b>\n'
             f'Powiat TERYT: <code>{rid}</code>\n'
-            f'{detail}\nOd: {escape(start)}\nDo: {escape(end)}\n'
+            f'{detail}\nPoczątek: {escape(start)}\n'
             f'{metric}\n'
-            '<i>Wskaźnik modelowy; nie potwierdza szkód i nie stanowi prognozy.</i>')
+            '<i>Wskaźnik modelowy; nie potwierdza szkód i nie jest prognozą.</i>')
     import pandas as pd
+    # Keep the old delivery log, with per-state ID to distinguish previous v1 CLOSED.
+    delivery_id = eid + ':open'
     for chat_id in chats:
         already = bot.ch.query_df(
             f"SELECT count() AS n FROM rbd.tg_incident_delivery "
-            f"WHERE event_id={sql_str(eid)} AND chat_id={chat_id} AND status='ok'")
+            f"WHERE event_id={sql_str(delivery_id)} AND chat_id={chat_id} AND status='ok'")
         if int(already.iloc[0]['n']) > 0:
-            log.info('Duplicate incident %s chat=%s skipped', eid, chat_id)
+            log.info('Duplicate incident OPEN %s chat=%s skipped', eid, chat_id)
             continue
-        # If Telegram fails, leave Kafka offset uncommitted; retry after recovery.
         bot.tg.send_text(chat_id, body)
         bot.ch.insert_df('tg_incident_delivery', pd.DataFrame([{
-            'event_id': eid, 'chat_id': chat_id, 'region_id':rid, 'source':source,
-            'status':'ok', 'error':'', 'sent':datetime.utcnow().replace(microsecond=0)}]))
-        log.info('Incident delivered event=%s source=%s county=%s chat=%s', eid, source, rid, chat_id)
+            'event_id': delivery_id, 'chat_id': chat_id, 'region_id': rid,
+            'source': source, 'status': 'ok', 'error': '',
+            'sent': datetime.utcnow().replace(microsecond=0)}]))
+        log.info('Incident OPEN delivered event=%s source=%s county=%s chat=%s',
+                 eid, source, rid, chat_id)
         time.sleep(PAUSE_S)
 
 
