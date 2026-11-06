@@ -598,11 +598,22 @@ def send_county_incident(bot: Bot, event: dict) -> None:
         return
     if event.get('source') not in ('S1', 'S2'):
         raise ValueError('Unexpected incident source')
-    if event.get('state') in ('update', 'closed'):
-        return
-    if event.get('state') != 'open':
-        raise ValueError('Unexpected incident state')
+    state = event.get('state')
 
+    if state == 'closed':
+        return
+
+    if state == 'update':
+        # if os.getenv('S1S2_NOTIFY_UPDATES', '0') != '1':
+            # return
+
+        interval = 6 if event['source'] == 'S2' else 1
+
+        if int(event['duration']) % interval != 0:
+            return
+
+    elif state != 'open':
+        raise ValueError('Unexpected incident state')
     eid = str(event.get('event_id', ''))
     rid = str(event.get('region_id', ''))
     if not re.fullmatch(r'[a-f0-9]{64}', eid) or not re.fullmatch(r'[0-9]{4}', rid):
@@ -658,7 +669,11 @@ def send_county_incident(bot: Bot, event: dict) -> None:
             '<i>Wskaźnik modelowy; nie potwierdza szkód i nie jest prognozą.</i>')
     import pandas as pd
     # Keep the old delivery log, with per-state ID to distinguish previous v1 CLOSED.
-    delivery_id = eid + ':open'
+    delivery_id = (
+        eid + ':open'
+        if state == 'open'
+        else eid + ':update:' + end
+    )
     for chat_id in chats:
         already = bot.ch.query_df(
             f"SELECT count() AS n FROM rbd.tg_incident_delivery "

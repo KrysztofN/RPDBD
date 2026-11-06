@@ -61,7 +61,7 @@ def reducer(key, iterator, state):
         k7,n7,k30,n30,k60,n60 = fields
         result.append(dict(region_id=rid,day=day,kbw_7d_mm=k7,kbw_30d_mm=k30,kbw_60d_mm=k60,
                            days_7d=n7,days_30d=n30,days_60d=n60,swvl1=moist,
-                           alert=int(n60==60 and k60 < -150)))
+                           alert=int(n7==10 and k7 < -50.0)))
         last_day=day
     if result:
         state.update((json.dumps(days,sort_keys=True),last_day))
@@ -85,7 +85,7 @@ def sink(batch, batch_id):
           F.concat(F.lit('S1:'),F.col('region_id'),F.lit(':'),F.col('day'),F.lit(':deficit')).alias('event_id'),
           F.lit('S1').alias('source'), F.lit('water_deficit').alias('alert_type'),
           'region_id', F.concat(F.col('day'),F.lit('T23:00:00Z')).alias('event_time'),
-          F.col('kbw_60d_mm').alias('value'),F.lit(-150.0).alias('threshold'),
+          F.col('kbw_7d_mm').alias('value'),F.lit(-50.0).alias('threshold'),
           F.lit(os.getenv('INCIDENTS_SIMULATION','1') == '1').alias('simulation'))).alias('value')))
     (alerts.write.format('kafka').option('kafka.bootstrap.servers',KAFKA)
       .option('topic',ALERTS).save())
